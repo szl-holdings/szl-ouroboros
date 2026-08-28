@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(
     0,
-    os.path.join(os.path.dirname(__file__), "..", "build", "torch-universal"),
+    os.path.join(os.path.dirname(__file__), "..", "torch-ext"),
 )
 
 import szl_ouroboros as ou  # noqa: E402
