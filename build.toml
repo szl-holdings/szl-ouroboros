@@ -3,3 +3,6 @@ name = "szl_ouroboros"
 
 [torch]
 universal = true
+
+[torch-noarch]
+src = "torch-ext/szl_ouroboros"
