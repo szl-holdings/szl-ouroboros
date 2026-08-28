@@ -6,6 +6,8 @@ Hub mirror: [`kernels/SZLHOLDINGS/szl-ouroboros`](https://huggingface.co/kernels
 
 ## What this is NOT
 
+- Hub `model.joblib` is **QUARANTINED** executable serialization. Do not `joblib.load` it. GitHub source is the approved path.
+
 - Not the `ouroboros` TypeScript service
 - Not trained weights
 - No MEASURED CUDA benches here

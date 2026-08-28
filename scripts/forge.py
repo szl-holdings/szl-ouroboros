@@ -18,7 +18,6 @@ import numpy as np
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
-import joblib
 
 SEED = 20260721
 random.seed(SEED); np.random.seed(SEED)
@@ -110,8 +109,9 @@ r2 = float(r2_score(yte, pred))
 target_std = float(np.std(yte))
 
 out_dir = os.path.dirname(os.path.abspath(__file__))
-joblib.dump(reg, f"{out_dir}/model.joblib")
-model_sha = hashlib.sha256(open(f"{out_dir}/model.joblib", "rb").read()).hexdigest()
+# P0: do not emit pickle/joblib. The kernel source is the approved path.
+if os.path.exists(f"{out_dir}/model.joblib") or os.path.exists(f"{os.path.dirname(out_dir)}/model.joblib"):
+    raise SystemExit("REFUSE: model.joblib is present. Delete it; pickle is not an approved load path.")
 receipt = {
   "artifact": "SZLHOLDINGS/szl-ouroboros surrogate v1",
   "role": "loop-tax regressor (predicts kernel-derived overheadMs from trace observables) — kernel remains ground truth",
@@ -126,7 +126,8 @@ receipt = {
             "feature_policy": "observable trace fields only (per-attempt latencies + ok flags + wall + budget); target is the kernel's own DERIVED arithmetic"},
   "model": {"type": "sklearn.HistGradientBoostingRegressor",
              "params": {"max_iter": 400, "early_stopping": True, "random_state": SEED},
-             "file": "model.joblib", "sha256": model_sha},
+             "file": None, "serialization": "QUARANTINED", "sha256": None,
+             "statement": "joblib/pickle is not an approved load path. Use torch-ext kernel source."},
   "metrics_MEASURED": {"held_out_MAE_ms": round(mae, 4), "held_out_R2": round(r2, 4),
                         "held_out_target_std_ms": round(target_std, 4),
                         "interpretation": "R2 is fidelity of the surrogate to the kernel's DERIVED overheadMs; the kernel's exact arithmetic remains authoritative"},
@@ -135,6 +136,14 @@ receipt = {
   "honesty": "Every number above is MEASURED by this run. The surrogate approximates the kernel's loop-tax derivation from trace shape; it never replaces the kernel's exact arithmetic. serializationTax stays a counterfactual. Λ untouched = Conjecture 1.",
   "trained_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
 }
+quarantine = {
+  "status": "QUARANTINED",
+  "artifact": "model.joblib",
+  "reason": "sklearn/joblib pickle is executable serialization, not an approved load path",
+  "approved_load": "torch-ext kernel source",
+  "hub": "SZLHOLDINGS/szl-ouroboros model.joblib remains Hub residue until a Hub PR with exact parent_commit deletes it",
+}
+with open(f"{out_dir}/SURROGATE_QUARANTINE.json", "w") as f: json.dump(quarantine, f, indent=2)
 with open(f"{out_dir}/TRAINING_RECEIPT.json", "w") as f: json.dump(receipt, f, indent=2)
 print(json.dumps(receipt["metrics_MEASURED"], indent=2))
 print(f"rows={len(y)} audited={audited} wall={receipt['environment']['wall_seconds']}s")
