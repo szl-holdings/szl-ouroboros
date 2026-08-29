@@ -48,3 +48,12 @@ jobs:
           python -I tests/test_no_unsafe_serialization.py
           python -I scripts/eval.py
           git diff --check
+
+      - name: CPU kernel smoke
+        env:
+          PYTHONPATH: ${{ github.workspace }}/torch-ext
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check pytest
+          python -m pytest tests -q --tb=short
