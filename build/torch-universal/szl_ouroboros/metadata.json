@@ -16,6 +16,11 @@
   "mirrors": "a11oy backbone loop tax (artifacts/api-server/src/lib/backbone.ts buildLoopTrace)",
   "provenance": {
     "lean_repo": "szl-holdings/lutar-lean",
-    "doi_lutar_lean": "10.5281/zenodo.20434308"
+    "doi_lutar_lean": "10.5281/zenodo.20434308",
+    "doi_lutar_lean_record_status": "SUPERSEDED",
+    "doi_lutar_lean_concept": "10.5281/zenodo.20434307",
+    "doi_lutar_lean_concept_head_observed": "10.5281/zenodo.20517840",
+    "doi_lutar_lean_concept_head_version_observed": "v18.0.0-errata",
+    "doi_lutar_lean_concept_head_observed_at": "2026-08-30"
   }
 }
