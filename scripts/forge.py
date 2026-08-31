@@ -7,7 +7,7 @@ is computed by the REAL kernel (`loop_tax`), so the target is definitionally the
 kernel's own arithmetic; the regressor's job is to reproduce that derivation from
 trace observables — its skill (MAE / R²) is MEASURED against held-out kernel labels.
 A sample of traces is re-audited by full kernel replay. Seeded, receipted."""
-import json, os, random, sys, time, hashlib, platform
+import json, os, random, sys, time, platform
 _here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if os.path.isdir(os.path.join(_here, "build", "torch-universal")):
     sys.path.insert(0, os.path.join(_here, "build", "torch-universal"))  # in-repo run
