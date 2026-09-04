@@ -28,6 +28,8 @@ CANDIDATE_SCHEMA = "szl.second-brain.frontier-candidate/v1"
 USER_AGENT = "szl-ouroboros-codex-frontier-review/1.0"
 MAX_STATE_BYTES = 512 * 1024
 MAX_CANDIDATE_BYTES = 4 * 1024 * 1024
+MAX_REVIEW_CANDIDATES = 64
+MAX_REVIEW_EXCERPT_CHARS = 2_000
 HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 CANDIDATE_ID = re.compile(r"^frontier:[0-9a-f]{32}$")
@@ -40,7 +42,11 @@ SECRET_PATTERNS = (
 )
 
 
-class PacketError(RuntimeError):
+class SnapshotError(RuntimeError):
+    """The exact source snapshot violated the bounded review contract."""
+
+
+class PacketError(SnapshotError):
     """The upstream public candidate packet violated its declared contract."""
 
 
@@ -129,9 +135,17 @@ def reject_secret_like_material(text: str) -> None:
             raise PacketError("secret-like material rejected from frontier packet")
 
 
+def reject_secret_like(text: str) -> None:
+    """Reject secret-shaped text without echoing the rejected value."""
+
+    reject_secret_like_material(text)
+
+
 def validate_packet(
     state_raw: bytes,
     candidates_raw: bytes,
+    *,
+    required_source_count: int | None = 6,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     try:
         state = json.loads(state_raw)
@@ -156,7 +170,13 @@ def validate_packet(
         raise PacketError("private graph material entered the frontier state")
     if int(state.get("raw_graph_nodes_admitted_to_gradients") or 0) != 0:
         raise PacketError("frontier state admitted raw graph nodes to gradients")
-    if int(state.get("source_count") or 0) != 6:
+    try:
+        source_count = int(state.get("source_count") or 0)
+    except (TypeError, ValueError) as exc:
+        raise PacketError("frontier source count is invalid") from exc
+    if source_count <= 0:
+        raise PacketError("frontier source count is invalid")
+    if required_source_count is not None and source_count != required_source_count:
         raise PacketError("frontier source count drifted")
 
     reject_secret_like_material(candidates_raw.decode("utf-8"))
@@ -199,6 +219,100 @@ def validate_packet(
     if not HEX_64.fullmatch(str(state.get("state_sha256") or "")):
         raise PacketError("frontier state digest is malformed")
     return state, rows
+
+
+def build_input(
+    revision: str,
+    state_raw: bytes,
+    candidates_raw: bytes,
+    *,
+    required_source_count: int | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build one bounded, digest-linked input and its source receipt."""
+
+    revision = revision.lower()
+    if not HEX_40.fullmatch(revision):
+        raise SnapshotError("source revision is not an exact Git commit")
+    state, rows = validate_packet(
+        state_raw,
+        candidates_raw,
+        required_source_count=required_source_count,
+    )
+    selected_rows = rows[:MAX_REVIEW_CANDIDATES]
+    candidates: list[dict[str, Any]] = []
+    for row in selected_rows:
+        content = str(row.get("content") or "")
+        reject_secret_like(content)
+        candidate: dict[str, Any] = {
+            "handle": row["id"],
+            "title": str(row.get("title") or ""),
+            "source_repository": str(row.get("source_repository") or ""),
+            "source_revision": row["source_revision"],
+            "source_path": str(row.get("source_path") or ""),
+            "source_kind": str(row.get("source_kind") or ""),
+            "content_sha256": row["content_sha256"],
+            "candidate_state": row["candidate_state"],
+            "admission": str(row.get("admission") or ""),
+            "untrusted_evidence_excerpt": content[:MAX_REVIEW_EXCERPT_CHARS],
+        }
+        quant_domain = row.get("quant_domain")
+        if quant_domain is not None:
+            candidate["quant_domain"] = str(quant_domain)
+        candidates.append(candidate)
+
+    authority = {
+        "mode": "REVIEW_ONLY",
+        "content_access": "PUBLIC_CANDIDATES_READ_ONLY",
+        "private_graph_used": False,
+        "training": "NONE",
+        "promotion": "NONE",
+        "execution": "NONE",
+        "merge": "NONE",
+        "provider_mutation": "NONE",
+    }
+    payload: dict[str, Any] = {
+        "schema": "szl.ouroboros.codex-frontier-input/v1",
+        "source": {
+            "repository": SOURCE_REPOSITORY,
+            "ref": SOURCE_REF,
+            "revision": revision,
+            "state_path": STATE_PATH,
+            "state_sha256": sha256_bytes(state_raw),
+            "candidates_path": CANDIDATES_PATH,
+            "candidates_sha256": sha256_bytes(candidates_raw),
+            "candidate_set_sha256": state["candidate_set_sha256"],
+            "source_count": int(state["source_count"]),
+            "lambda": state["lambda"],
+        },
+        "selection": {
+            "total_candidate_count": len(rows),
+            "selected_candidate_count": len(candidates),
+            "maximum_candidate_count": MAX_REVIEW_CANDIDATES,
+            "selection_order": "SOURCE_ORDER",
+        },
+        "candidates": candidates,
+        "authority": authority,
+    }
+    payload["input_sha256"] = sha256_bytes(canonical_bytes(payload))
+
+    receipt: dict[str, Any] = {
+        "schema": "szl.ouroboros.codex-frontier-source/v1",
+        "state": "VERIFIED_EXACT_SOURCE_SNAPSHOT",
+        "source_repository": SOURCE_REPOSITORY,
+        "source_ref": SOURCE_REF,
+        "source_revision": revision,
+        "state_path": STATE_PATH,
+        "state_sha256": sha256_bytes(state_raw),
+        "candidates_path": CANDIDATES_PATH,
+        "candidates_sha256": sha256_bytes(candidates_raw),
+        "candidate_set_sha256": state["candidate_set_sha256"],
+        "total_candidate_count": len(rows),
+        "selected_candidate_count": len(candidates),
+        "input_sha256": payload["input_sha256"],
+        "authority": authority,
+    }
+    receipt["receipt_sha256"] = sha256_bytes(canonical_bytes(receipt))
+    return payload, receipt
 
 
 def atomic_write(path: Path, payload: bytes) -> None:
@@ -257,9 +371,42 @@ def prepare(
     return receipt_core
 
 
+def prepare_review(
+    input_path: Path,
+    receipt_path: Path,
+    *,
+    token: str | None,
+    api_url: str = "https://api.github.com",
+    raw_url: str = "https://raw.githubusercontent.com",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Fetch, verify, and atomically materialize a review-only source snapshot."""
+
+    revision = resolve_source_revision(token=token, api_url=api_url)
+    state_raw, candidates_raw = fetch_immutable_files(revision, raw_url=raw_url)
+    payload, receipt = build_input(
+        revision,
+        state_raw,
+        candidates_raw,
+        required_source_count=6,
+    )
+    atomic_write(
+        input_path,
+        (json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        ),
+    )
+    atomic_write(
+        receipt_path,
+        (json.dumps(receipt, sort_keys=True, indent=2) + "\n").encode("utf-8"),
+    )
+    return payload, receipt
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=Path, default=Path("inputs"))
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--input", type=Path)
+    parser.add_argument("--receipt", type=Path)
     parser.add_argument(
         "--api-url",
         default=os.environ.get("GITHUB_API_URL", "https://api.github.com"),
@@ -267,8 +414,34 @@ def main() -> int:
     parser.add_argument("--raw-url", default="https://raw.githubusercontent.com")
     args = parser.parse_args()
     token = os.environ.get("GITHUB_TOKEN", "").strip() or None
+    if (args.input is None) != (args.receipt is None):
+        parser.error("--input and --receipt must be provided together")
+    if args.input is not None and args.output is not None:
+        parser.error("--output cannot be combined with --input and --receipt")
+    if args.input is not None:
+        payload, receipt = prepare_review(
+            args.input,
+            args.receipt,
+            token=token,
+            api_url=args.api_url,
+            raw_url=args.raw_url,
+        )
+        print(
+            json.dumps(
+                {
+                    "source_revision": payload["source"]["revision"],
+                    "candidate_count": payload["selection"]["selected_candidate_count"],
+                    "candidate_set_sha256": payload["source"]["candidate_set_sha256"],
+                    "input": str(args.input),
+                    "receipt": str(args.receipt),
+                    "receipt_sha256": receipt["receipt_sha256"],
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
     receipt = prepare(
-        args.output,
+        args.output or Path("inputs"),
         token=token,
         api_url=args.api_url,
         raw_url=args.raw_url,
@@ -279,7 +452,7 @@ def main() -> int:
                 "source_revision": receipt["source_revision"],
                 "candidate_count": receipt["candidate_count"],
                 "candidate_set_sha256": receipt["candidate_set_sha256"],
-                "output": str(args.output),
+                "output": str(args.output or Path("inputs")),
             },
             sort_keys=True,
         )
