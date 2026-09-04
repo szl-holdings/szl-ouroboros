@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://szl-holdings.example/schemas/codex-frontier-review.schema.json",
+  "title": "SZL Codex frontier review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "state",
+    "candidate_set_sha256",
+    "summary",
+    "recommendations",
+    "authority"
+  ],
+  "properties": {
+    "schema": {
+      "const": "szl.codex.frontier-review/v1"
+    },
+    "state": {
+      "enum": ["REVIEW_PROPOSED", "NO_ACTION_RECOMMENDED", "BLOCKED"]
+    },
+    "candidate_set_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "recommendations": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "priority",
+          "target_repository",
+          "title",
+          "rationale",
+          "evidence_candidate_ids",
+          "recommended_change_type",
+          "validation",
+          "risk"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^R[0-9]{2}$"
+          },
+          "priority": {
+            "enum": ["P0", "P1", "P2", "P3"]
+          },
+          "target_repository": {
+            "enum": [
+              "szl-holdings/szl-second-brain",
+              "szl-holdings/anatomy",
+              "szl-holdings/a11oy",
+              "szl-holdings/szl-formulas",
+              "szl-holdings/szl-forge",
+              "szl-holdings/szl-nemo",
+              "szl-holdings/szl-ouroboros"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 180
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1200
+          },
+          "evidence_candidate_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^frontier:[0-9a-f]{32}$"
+            }
+          },
+          "recommended_change_type": {
+            "enum": [
+              "TEST",
+              "DOCUMENTATION",
+              "OBSERVABILITY",
+              "INTEGRATION",
+              "PERFORMANCE_EXPERIMENT",
+              "SECURITY_HARDENING",
+              "RESEARCH_EXPERIMENT",
+              "NO_CHANGE"
+            ]
+          },
+          "validation": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            }
+          },
+          "risk": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 600
+          }
+        }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "training",
+        "promotion",
+        "execution",
+        "merge",
+        "provider_mutation"
+      ],
+      "properties": {
+        "training": {"const": "NONE"},
+        "promotion": {"const": "NONE"},
+        "execution": {"const": "NONE"},
+        "merge": {"const": "NONE"},
+        "provider_mutation": {"const": "NONE"}
+      }
+    }
+  }
+}
