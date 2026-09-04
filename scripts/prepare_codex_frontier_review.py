@@ -387,7 +387,7 @@ def prepare_review(
         revision,
         state_raw,
         candidates_raw,
-        required_source_count=6,
+        required_source_count=7,
     )
     atomic_write(
         input_path,
