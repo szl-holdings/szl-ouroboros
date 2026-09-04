@@ -1,0 +1,334 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Codex continuous frontier loop
+
+on:
+  pull_request:
+    paths:
+      - scripts/continuous_frontier_loop.py
+      - tests/test_continuous_frontier_loop.py
+      - codex/frontier-review-prompt.md
+      - codex/frontier-review.schema.json
+      - .github/workflows/codex-continuous-frontier-loop.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/continuous_frontier_loop.py
+      - tests/test_continuous_frontier_loop.py
+      - codex/frontier-review-prompt.md
+      - codex/frontier-review.schema.json
+      - .github/workflows/codex-continuous-frontier-loop.yml
+  schedule:
+    - cron: "47 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why this bounded model-assisted review is being run"
+        required: false
+        default: "manual continuous frontier review"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-continuous-frontier-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CONTEXT_ARTIFACT: ouroboros-frontier-context-${{ github.run_id }}-${{ github.run_attempt }}
+  PROPOSAL_ARTIFACT: ouroboros-codex-proposal-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  contract:
+    name: Network-free loop and authority contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Prove deterministic boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "pytest==8.3.5"
+          python -m json.tool codex/frontier-review.schema.json >/dev/null
+          python -m py_compile scripts/continuous_frontier_loop.py tests/test_continuous_frontier_loop.py
+          PYTHONPATH="${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}/torch-ext" \
+            python -m pytest -q tests/test_continuous_frontier_loop.py
+          grep -F 'permission-profile: ":read-only"' .github/workflows/codex-continuous-frontier-loop.yml
+          grep -F 'safety-strategy: "drop-sudo"' .github/workflows/codex-continuous-frontier-loop.yml
+          grep -F 'merge": "NONE"' codex/frontier-review.schema.json
+          grep -F 'training": "NONE"' codex/frontier-review.schema.json
+          grep -F 'provider_mutation": "NONE"' codex/frontier-review.schema.json
+          git diff --check
+
+  context:
+    name: Build exact public-source loop context
+    if: github.event_name != 'pull_request'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      candidate_digest: ${{ steps.identity.outputs.candidate_digest }}
+      context_digest: ${{ steps.identity.outputs.context_digest }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout protected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Observe exact Second Brain, formulas, Anatomy, and local Ouroboros
+        id: identity
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p runtime
+          PYTHONPATH="${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}/torch-ext" \
+            python scripts/continuous_frontier_loop.py build-context \
+              --context runtime/frontier-context.json \
+              --candidates runtime/frontier-candidates.jsonl
+          source_sha="$(git rev-parse HEAD)"
+          candidate_digest="$(python -c 'import json; print(json.load(open("runtime/frontier-context.json"))["second_brain"]["candidate_set_sha256"])')"
+          context_digest="$(python -c 'import json; print(json.load(open("runtime/frontier-context.json"))["context_sha256"])')"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "candidate_digest=$candidate_digest" >> "$GITHUB_OUTPUT"
+          echo "context_digest=$context_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable loop context
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.CONTEXT_ARTIFACT }}
+          path: |
+            runtime/frontier-context.json
+            runtime/frontier-candidates.jsonl
+          if-no-files-found: error
+          retention-days: 30
+
+  codex:
+    name: Read-only Codex Ouroboros review
+    if: github.event_name != 'pull_request'
+    needs: context
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      proposal_state: ${{ steps.proposal.outputs.state }}
+      proposal_digest: ${{ steps.proposal.outputs.proposal_digest }}
+      candidate_digest: ${{ steps.proposal.outputs.candidate_digest }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact loop source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.context.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Download exact observed context
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.CONTEXT_ARTIFACT }}
+          path: .
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Detect repository-scoped Codex authority without revealing it
+        id: key
+        env:
+          CODEX_KEY: ${{ secrets.OPENAI_API_KEY || secrets.CODEX_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$CODEX_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No OPENAI_API_KEY or CODEX_API_KEY is available; this run will emit a BLOCKED receipt."
+          fi
+
+      - name: Run official Codex action inside a read-only sandbox
+        if: steps.key.outputs.available == 'true'
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY || secrets.CODEX_API_KEY }}
+          prompt-file: codex/frontier-review-prompt.md
+          output-file: runtime/codex-output.json
+          output-schema-file: codex/frontier-review.schema.json
+          permission-profile: ":read-only"
+          safety-strategy: "drop-sudo"
+          allow-bots: "true"
+
+      - name: Validate model output against exact handles and zero authority
+        if: steps.key.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/continuous_frontier_loop.py validate-output \
+            --context runtime/frontier-context.json \
+            --candidates runtime/frontier-candidates.jsonl \
+            --input runtime/codex-output.json \
+            --proposal runtime/validated-proposal.json \
+            --receipt runtime/codex-loop-receipt.json
+
+      - name: Emit an honest blocked receipt when Codex authority is unavailable
+        if: steps.key.outputs.available != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/continuous_frontier_loop.py write-blocked \
+            --context runtime/frontier-context.json \
+            --proposal runtime/validated-proposal.json \
+            --receipt runtime/codex-loop-receipt.json \
+            --reason CODEX_SECRET_UNAVAILABLE
+
+      - name: Expose only content-addressed non-secret proposal identity
+        id: proposal
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(python -c 'import json; print(json.load(open("runtime/validated-proposal.json"))["state"])')"
+          proposal_digest="$(python -c 'import json; print(json.load(open("runtime/validated-proposal.json"))["proposal_sha256"])')"
+          candidate_digest="$(python -c 'import json; print(json.load(open("runtime/validated-proposal.json"))["candidate_set_sha256"])')"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "proposal_digest=$proposal_digest" >> "$GITHUB_OUTPUT"
+          echo "candidate_digest=$candidate_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Upload validated proposal and receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.PROPOSAL_ARTIFACT }}
+          path: |
+            runtime/validated-proposal.json
+            runtime/codex-loop-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+
+  propose:
+    name: Open one human-review proposal, never merge it
+    if: needs.codex.result == 'success' && needs.codex.outputs.proposal_state == 'PROPOSAL'
+    needs: [context, codex]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact protected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.context.outputs.source_sha }}
+          fetch-depth: 0
+
+      - name: Download exact validated proposal
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.PROPOSAL_ARTIFACT }}
+          path: .
+
+      - name: Recheck main and open a content-addressed review PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
+          CANDIDATE_DIGEST: ${{ needs.codex.outputs.candidate_digest }}
+          PROPOSAL_DIGEST: ${{ needs.codex.outputs.proposal_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          current_main="$(git rev-parse origin/main)"
+          if [ "$current_main" != "$SOURCE_SHA" ]; then
+            echo "::error::Protected main moved after observation; refusing a stale proposal."
+            exit 3
+          fi
+
+          short_candidate="${CANDIDATE_DIGEST:0:16}"
+          short_proposal="${PROPOSAL_DIGEST:0:16}"
+          branch="automation/codex-frontier-${short_candidate}"
+          destination="proposals/codex-frontier/${short_candidate}"
+
+          if [ -e "$destination/proposal.json" ]; then
+            echo "The candidate set already has a durable review record; no duplicate PR."
+            exit 0
+          fi
+          existing="$(gh pr list --state open --head "$branch" --json url --jq '.[0].url // ""')"
+          if [ -n "$existing" ]; then
+            echo "An open review PR already owns this candidate set: $existing"
+            exit 0
+          fi
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "A non-force branch already owns this candidate set; refusing replacement."
+            exit 0
+          fi
+
+          git switch -c "$branch"
+          mkdir -p "$destination"
+          cp runtime/validated-proposal.json "$destination/proposal.json"
+          cp runtime/codex-loop-receipt.json "$destination/receipt.json"
+          git config user.name "Lutar, Stephen P."
+          git config user.email "stephenlutar2@gmail.com"
+          git add "$destination"
+          git diff --cached --quiet && { echo "::error::No proposal bytes to commit"; exit 4; }
+          git commit -s -m "chore(ouroboros): propose frontier review ${short_candidate}"
+          git push origin "HEAD:$branch"
+
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "chore(ouroboros): review frontier ${short_candidate}" \
+            --body "## Read-only Codex frontier proposal
+
+This is a review artifact, not an implemented change.
+
+- Second Brain candidate set: \`${CANDIDATE_DIGEST}\`
+- Validated proposal: \`${PROPOSAL_DIGEST}\`
+- Source revision: \`${SOURCE_SHA}\`
+- Ouroboros cycles: bounded to five
+- Private memory access: \`NONE\`
+- Training and weight update: \`NONE\`
+- Promotion, merge, execution, and provider mutation: \`NONE\`
+- Consequential action: \`HUMAN_REVIEW_REQUIRED\`
+
+The scheduled workflow cannot merge this PR. Review the cited handles, falsification step, target paths, tests, and risks before deciding whether to port the proposal into its target repository.
+
+Signed-off-by: Stephen Lutar <stephenlutar2@gmail.com>"
