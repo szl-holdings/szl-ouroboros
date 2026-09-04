@@ -69,9 +69,9 @@ jobs:
             python -m pytest -q tests/test_continuous_frontier_loop.py
           grep -F 'permission-profile: ":read-only"' .github/workflows/codex-continuous-frontier-loop.yml
           grep -F 'safety-strategy: "drop-sudo"' .github/workflows/codex-continuous-frontier-loop.yml
-          grep -F 'merge": "NONE"' codex/frontier-review.schema.json
-          grep -F 'training": "NONE"' codex/frontier-review.schema.json
-          grep -F 'provider_mutation": "NONE"' codex/frontier-review.schema.json
+          grep -F '"merge": {"const": "NONE"}' codex/frontier-review.schema.json
+          grep -F '"training": {"const": "NONE"}' codex/frontier-review.schema.json
+          grep -F '"provider_mutation": {"const": "NONE"}' codex/frontier-review.schema.json
           git diff --check
 
   context:
