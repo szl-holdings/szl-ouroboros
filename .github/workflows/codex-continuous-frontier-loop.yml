@@ -69,9 +69,9 @@ jobs:
             python -m pytest -q tests/test_continuous_frontier_loop.py
           grep -F 'permission-profile: ":read-only"' .github/workflows/codex-continuous-frontier-loop.yml
           grep -F 'safety-strategy: "drop-sudo"' .github/workflows/codex-continuous-frontier-loop.yml
-          grep -F 'merge": "NONE"' codex/frontier-review.schema.json
-          grep -F 'training": "NONE"' codex/frontier-review.schema.json
-          grep -F 'provider_mutation": "NONE"' codex/frontier-review.schema.json
+          grep -F '"merge": {"const": "NONE"}' codex/frontier-review.schema.json
+          grep -F '"training": {"const": "NONE"}' codex/frontier-review.schema.json
+          grep -F '"provider_mutation": {"const": "NONE"}' codex/frontier-review.schema.json
           git diff --check
 
   context:
@@ -318,17 +318,17 @@ jobs:
             --title "chore(ouroboros): review frontier ${short_candidate}" \
             --body "## Read-only Codex frontier proposal
 
-This is a review artifact, not an implemented change.
+          This is a review artifact, not an implemented change.
 
-- Second Brain candidate set: \`${CANDIDATE_DIGEST}\`
-- Validated proposal: \`${PROPOSAL_DIGEST}\`
-- Source revision: \`${SOURCE_SHA}\`
-- Ouroboros cycles: bounded to five
-- Private memory access: \`NONE\`
-- Training and weight update: \`NONE\`
-- Promotion, merge, execution, and provider mutation: \`NONE\`
-- Consequential action: \`HUMAN_REVIEW_REQUIRED\`
+          - Second Brain candidate set: \`${CANDIDATE_DIGEST}\`
+          - Validated proposal: \`${PROPOSAL_DIGEST}\`
+          - Source revision: \`${SOURCE_SHA}\`
+          - Ouroboros cycles: bounded to five
+          - Private memory access: \`NONE\`
+          - Training and weight update: \`NONE\`
+          - Promotion, merge, execution, and provider mutation: \`NONE\`
+          - Consequential action: \`HUMAN_REVIEW_REQUIRED\`
 
-The scheduled workflow cannot merge this PR. Review the cited handles, falsification step, target paths, tests, and risks before deciding whether to port the proposal into its target repository.
+          The scheduled workflow cannot merge this PR. Review the cited handles, falsification step, target paths, tests, and risks before deciding whether to port the proposal into its target repository.
 
-Signed-off-by: Stephen Lutar <stephenlutar2@gmail.com>"
+          Signed-off-by: Stephen Lutar <stephenlutar2@gmail.com>"
