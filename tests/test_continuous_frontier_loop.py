@@ -219,3 +219,18 @@ def test_write_blocked_is_an_honest_terminal_receipt(tmp_path: Path) -> None:
     assert receipt["codex_output_validated"] is True
     assert receipt["automatic_merge_performed"] is False
     assert receipt["production_execution_performed"] is False
+
+
+def test_workflow_downloads_artifacts_to_the_runtime_paths_it_consumes() -> None:
+    workflow = (
+        Path(__file__).parents[1]
+        / ".github"
+        / "workflows"
+        / "codex-continuous-frontier-loop.yml"
+    ).read_text(encoding="utf-8")
+    download = "uses: actions/download-artifact@"
+    download_blocks = workflow.split(download)[1:]
+    assert len(download_blocks) == 2
+    for block in download_blocks:
+        with_block = block.split("\n\n", 1)[0]
+        assert "          path: runtime" in with_block
