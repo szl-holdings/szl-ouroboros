@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Fix Codex frontier loop once
+
+on:
+  push:
+    branches:
+      - feat/codex-continuous-frontier-loop-v1-20260904
+    paths:
+      - .github/workflows/fix-codex-frontier-loop-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/codex-continuous-frontier-loop-v1-20260904
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Correct artifact and output boundary details
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path(".github/workflows/codex-frontier-review.yml")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace(
+              "${{ steps.codex.outputs.final-message }}",
+              "${{ steps.codex.outputs['final-message'] }}",
+          )
+          codex_anchor = "  codex:\n"
+          start = text.index(codex_anchor)
+          record = text.index("\n  record:\n", start)
+          block = text[start:record]
+          permissions = "    permissions:\n      contents: read\n"
+          if "      actions: read\n" not in block:
+              if permissions not in block:
+                  raise SystemExit("Codex job permissions anchor is absent")
+              block = block.replace(
+                  permissions,
+                  permissions + "      actions: read\n",
+                  1,
+              )
+          text = text[:start] + block + text[record:]
+          text = text.replace('              --body-file reports/codex-frontier-review.md \\\n              --label "enhancement"', '              --body-file reports/codex-frontier-review.md')
+          if "steps.codex.outputs.final-message" in text:
+              raise SystemExit("hyphenated action output still uses unsafe dot access")
+          if "gh pr merge" in text or "git push" in text:
+              raise SystemExit("Codex review workflow gained code mutation authority")
+          path.write_text(text, encoding="utf-8", newline="\n")
+          PY
+          git diff --check
+
+      - name: Run the complete kernel and Codex loop tests
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir \
+            "pytest==8.3.5" "ruff==0.12.9"
+          python -m py_compile \
+            scripts/prepare_codex_frontier_review.py \
+            scripts/validate_codex_frontier_review.py \
+            tests/test_codex_frontier_loop.py
+          PYTHONPATH=./torch-ext python -m pytest -q
+          python -m ruff check \
+            scripts/prepare_codex_frontier_review.py \
+            scripts/validate_codex_frontier_review.py \
+            tests/test_codex_frontier_loop.py
+          python -m json.tool codex/frontier-review.schema.json >/dev/null
+          git diff --check
+
+      - name: Commit the durable workflow correction and remove this controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Lutar, Stephen P."
+          git config user.email "stephenlutar2@gmail.com"
+          git add .github/workflows/codex-frontier-review.yml
+          git rm .github/workflows/fix-codex-frontier-loop-once.yml
+          git diff --cached --quiet && { echo "no Codex workflow correction"; exit 1; }
+          git commit -s -m "fix(codex): harden artifact and review publication boundaries"
+          git push origin HEAD:feat/codex-continuous-frontier-loop-v1-20260904
