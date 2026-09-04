@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.szlholdings.com/ouroboros/codex-frontier-review-v1.json",
+  "title": "SZL Codex frontier review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "candidate_set_sha256",
+    "state",
+    "summary",
+    "recommendations",
+    "authority"
+  ],
+  "properties": {
+    "schema": {
+      "const": "szl.ouroboros.codex-frontier-review/v1"
+    },
+    "candidate_set_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "state": {
+      "const": "PROPOSAL_REVIEW_REQUIRED"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1600
+    },
+    "recommendations": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "rationale",
+          "source_handles",
+          "target_repository",
+          "scope",
+          "risk",
+          "verification",
+          "claims"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^REC-[0-9]{3}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 180
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1600
+          },
+          "source_handles": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^frontier:[0-9a-f]{32}$"
+            }
+          },
+          "target_repository": {
+            "type": "string",
+            "enum": [
+              "szl-holdings/szl-second-brain",
+              "szl-holdings/anatomy",
+              "szl-holdings/a11oy",
+              "szl-holdings/szl-formulas",
+              "szl-holdings/szl-forge",
+              "szl-holdings/szl-nemo",
+              "szl-holdings/szl-ouroboros"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "DOCUMENTATION",
+              "TEST",
+              "READ_ONLY_RUNTIME",
+              "VISUALIZATION",
+              "EVALUATION",
+              "RESEARCH_PROPOSAL"
+            ]
+          },
+          "risk": {
+            "type": "string",
+            "enum": ["LOW", "MEDIUM", "HIGH"]
+          },
+          "verification": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            }
+          },
+          "claims": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "execution_performed",
+              "weights_trained",
+              "claim_promoted",
+              "private_graph_used",
+              "human_review_required"
+            ],
+            "properties": {
+              "execution_performed": {"const": false},
+              "weights_trained": {"const": false},
+              "claim_promoted": {"const": false},
+              "private_graph_used": {"const": false},
+              "human_review_required": {"const": true}
+            }
+          }
+        }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "execution",
+        "merge",
+        "provider_mutation",
+        "training",
+        "promotion"
+      ],
+      "properties": {
+        "mode": {"const": "REVIEW_ONLY"},
+        "execution": {"const": "NONE"},
+        "merge": {"const": "NONE"},
+        "provider_mutation": {"const": "NONE"},
+        "training": {"const": "NONE"},
+        "promotion": {"const": "NONE"}
+      }
+    }
+  }
+}
