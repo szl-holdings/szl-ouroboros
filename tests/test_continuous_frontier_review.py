@@ -96,7 +96,6 @@ def write_finalize_fixture(root: Path) -> tuple[Path, Path, Path, str]:
         encoding="utf-8",
     )
     review = root / "review.json"
-    output = root / "receipt.json"
     return source, candidates, review, digest
 
 
