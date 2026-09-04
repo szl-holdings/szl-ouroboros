@@ -46,7 +46,7 @@ def packet_bytes() -> tuple[bytes, bytes, str]:
         "state": "REVIEW_REQUIRED",
         "candidate_count": 1,
         "candidate_set_sha256": digest,
-        "source_count": 6,
+        "source_count": 7,
         "public_content_access": "HANDLES_ONLY",
         "controller_content_access": "AUTHORIZED_CONTROLLER_ONLY",
         "private_graph_nodes_loaded": 0,
@@ -80,7 +80,7 @@ def write_finalize_fixture(root: Path) -> tuple[Path, Path, Path, str]:
                 "candidates_sha256": hashlib.sha256(candidates_raw).hexdigest(),
                 "candidate_count": 1,
                 "candidate_set_sha256": digest,
-                "source_count": 6,
+                "source_count": 7,
                 "candidate_state": "DISCOVERED_REVIEW_REQUIRED",
                 "content_scope": "PUBLIC_SOURCE_REVIEW_MATERIAL",
                 "authority": {
@@ -104,6 +104,14 @@ def test_prepare_validates_exact_candidate_digest_and_authority() -> None:
     state, rows = validate_packet(state_raw, candidates_raw)
     assert state["candidate_set_sha256"] == digest
     assert rows == [candidate()]
+
+
+def test_prepare_rejects_stale_six_source_contract() -> None:
+    state_raw, candidates_raw, _digest = packet_bytes()
+    state = json.loads(state_raw)
+    state["source_count"] = 6
+    with pytest.raises(PacketError, match="source count drifted"):
+        validate_packet(json.dumps(state).encode(), candidates_raw)
 
 
 def test_prepare_rejects_candidate_promotion() -> None:

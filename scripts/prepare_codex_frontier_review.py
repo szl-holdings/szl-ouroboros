@@ -25,6 +25,7 @@ STATE_PATH = "data/frontier-state.v1.json"
 CANDIDATES_PATH = "data/frontier-candidates.public.jsonl"
 STATE_SCHEMA = "szl.second-brain.frontier-state/v1"
 CANDIDATE_SCHEMA = "szl.second-brain.frontier-candidate/v1"
+EXPECTED_PUBLIC_SOURCE_COUNT = 7  # live Second Brain packet: 6 original + ouroboros_runtime
 USER_AGENT = "szl-ouroboros-codex-frontier-review/1.0"
 MAX_STATE_BYTES = 512 * 1024
 MAX_CANDIDATE_BYTES = 4 * 1024 * 1024
@@ -145,7 +146,7 @@ def validate_packet(
     state_raw: bytes,
     candidates_raw: bytes,
     *,
-    required_source_count: int | None = 6,
+    required_source_count: int | None = EXPECTED_PUBLIC_SOURCE_COUNT,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     try:
         state = json.loads(state_raw)
@@ -178,6 +179,9 @@ def validate_packet(
         raise PacketError("frontier source count is invalid")
     if required_source_count is not None and source_count != required_source_count:
         raise PacketError("frontier source count drifted")
+    sources = state.get("sources")
+    if isinstance(sources, list) and sources and len(sources) != source_count:
+        raise PacketError("frontier source list count mismatch")
 
     reject_secret_like_material(candidates_raw.decode("utf-8"))
     rows: list[dict[str, Any]] = []
@@ -387,7 +391,7 @@ def prepare_review(
         revision,
         state_raw,
         candidates_raw,
-        required_source_count=6,
+        required_source_count=EXPECTED_PUBLIC_SOURCE_COUNT,
     )
     atomic_write(
         input_path,
