@@ -1,0 +1,343 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Ouroboros Codex frontier review
+
+on:
+  schedule:
+    - cron: "47 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Re-run Codex even when this candidate-set digest already has a review issue"
+        required: false
+        type: boolean
+        default: false
+      reason:
+        description: "Operator reason recorded in the workflow run"
+        required: false
+        default: "manual bounded frontier review"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ouroboros-codex-frontier-review
+  cancel-in-progress: true
+
+env:
+  INPUT_ARTIFACT: codex-frontier-input-${{ github.run_id }}-${{ github.run_attempt }}
+  REVIEW_ARTIFACT: codex-frontier-review-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  snapshot:
+    name: Resolve and verify exact Second Brain evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      candidate_digest: ${{ steps.decision.outputs.candidate_digest }}
+      source_revision: ${{ steps.decision.outputs.source_revision }}
+      should_run: ${{ steps.decision.outputs.should_run }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact controller source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Prepare the fixed-source, digest-bound prompt input
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          python scripts/prepare_codex_frontier_review.py \
+            --input codex/frontier-review-input.json \
+            --receipt reports/codex-frontier-source-receipt.json
+          python -m py_compile \
+            scripts/prepare_codex_frontier_review.py \
+            scripts/validate_codex_frontier_review.py
+          python -m json.tool codex/frontier-review.schema.json >/dev/null
+          python -m json.tool codex/frontier-review-input.json >/dev/null
+          python -m json.tool reports/codex-frontier-source-receipt.json >/dev/null
+          git diff --check
+
+      - name: Decide whether this candidate set needs a new review
+        id: decision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force || false }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="$(python -c 'import json; print(json.load(open("codex/frontier-review-input.json"))["source"]["candidate_set_sha256"])')"
+          revision="$(python -c 'import json; print(json.load(open("codex/frontier-review-input.json"))["source"]["revision"])')"
+          title="[frontier-review] ${digest:0:16} · Codex bounded analysis"
+          existing="$(gh issue list --state all --limit 200 --json title --jq ".[] | select(.title == \"$title\") | .title" | head -n 1)"
+          should_run=true
+          if [ -n "$existing" ] && [ "$FORCE" != "true" ]; then
+            should_run=false
+          fi
+          echo "candidate_digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "source_revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          echo "Candidate set: $digest"
+          echo "Second Brain source: $revision"
+          echo "Codex required: $should_run"
+
+      - name: Upload exact prompt input before the sandboxed Codex job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.INPUT_ARTIFACT }}
+          path: |
+            codex/frontier-review-input.json
+            reports/codex-frontier-source-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+
+  codex:
+    name: Read-only Codex proposal pass
+    if: needs.snapshot.outputs.should_run == 'true'
+    needs: snapshot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      final_message: ${{ steps.codex.outputs.final-message }}
+    steps:
+      - name: Harden runner before Codex removes privilege
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact controller source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download the exact verified prompt input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.INPUT_ARTIFACT }}
+          path: .
+
+      - name: Require configured Codex API authority
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.CODEX_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::OPENAI_API_KEY or CODEX_API_KEY is not configured; refusing to fabricate a Codex review."
+            exit 2
+          fi
+
+      - name: Execute Codex in a read-only disposable-runner sandbox
+        id: codex
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
+        with:
+          prompt-file: codex/frontier-review-prompt.md
+          output-schema-file: codex/frontier-review.schema.json
+          openai-api-key: ${{ secrets.OPENAI_API_KEY || secrets.CODEX_API_KEY }}
+          working-directory: ${{ github.workspace }}
+          permission-profile: ":read-only"
+          safety-strategy: drop-sudo
+          effort: high
+          allow-bots: "true"
+          allow-bot-users: "github-actions[bot]"
+
+  record:
+    name: Deterministically verify and publish the review hold
+    if: always() && needs.snapshot.result == 'success'
+    needs: [snapshot, codex]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact controller source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Download the exact verified prompt input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.INPUT_ARTIFACT }}
+          path: .
+
+      - name: Record unchanged candidate-set convergence
+        if: needs.snapshot.outputs.should_run != 'true'
+        shell: bash
+        env:
+          CANDIDATE_DIGEST: ${{ needs.snapshot.outputs.candidate_digest }}
+          SOURCE_REVISION: ${{ needs.snapshot.outputs.source_revision }}
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          receipt = {
+              "schema": "szl.ouroboros.codex-frontier-run/v1",
+              "state": "SKIPPED_UNCHANGED_CANDIDATE_SET",
+              "source_repository": "szl-holdings/szl-second-brain",
+              "source_revision": os.environ["SOURCE_REVISION"],
+              "candidate_set_sha256": os.environ["CANDIDATE_DIGEST"],
+              "codex_invoked": False,
+              "authority": {
+                  "execution": "NONE",
+                  "merge": "NONE",
+                  "provider_mutation": "NONE",
+                  "training": "NONE",
+                  "promotion": "NONE",
+              },
+          }
+          canonical = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+          receipt["receipt_sha256"] = hashlib.sha256(canonical).hexdigest()
+          Path("reports/codex-frontier-run.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+
+      - name: Materialize the Codex result without shell interpolation
+        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.result == 'success'
+        env:
+          CODEX_RESULT: ${{ needs.codex.outputs.final_message }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          value = os.environ.get("CODEX_RESULT", "")
+          if not value.strip():
+              raise SystemExit("Codex returned an empty final message")
+          Path("reports").mkdir(parents=True, exist_ok=True)
+          Path("reports/codex-result.raw.json").write_text(value, encoding="utf-8")
+          PY
+
+      - name: Validate citations, authority, and the Ouroboros receipt chain
+        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.result == 'success'
+        run: |
+          set -euo pipefail
+          python scripts/validate_codex_frontier_review.py \
+            --input codex/frontier-review-input.json \
+            --result reports/codex-result.raw.json \
+            --normalized reports/codex-frontier-review.json \
+            --receipt reports/codex-frontier-review-receipt.json \
+            --issue-body reports/codex-frontier-review.md
+          python -m json.tool reports/codex-frontier-review.json >/dev/null
+          python -m json.tool reports/codex-frontier-review-receipt.json >/dev/null
+          git diff --check
+
+      - name: Create exactly one human-review issue for this candidate set
+        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.result == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_DIGEST: ${{ needs.snapshot.outputs.candidate_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="[frontier-review] ${CANDIDATE_DIGEST:0:16} · Codex bounded analysis"
+          existing="$(gh issue list --state all --limit 200 --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file reports/codex-frontier-review.md
+          else
+            gh issue create \
+              --title "$title" \
+              --body-file reports/codex-frontier-review.md \
+              --label "enhancement"
+          fi
+
+      - name: Record an explicit unavailable Codex pass
+        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.result != 'success'
+        shell: bash
+        env:
+          CANDIDATE_DIGEST: ${{ needs.snapshot.outputs.candidate_digest }}
+          SOURCE_REVISION: ${{ needs.snapshot.outputs.source_revision }}
+          CODEX_JOB_RESULT: ${{ needs.codex.result }}
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          receipt = {
+              "schema": "szl.ouroboros.codex-frontier-run/v1",
+              "state": "CODEX_UNAVAILABLE",
+              "source_repository": "szl-holdings/szl-second-brain",
+              "source_revision": os.environ["SOURCE_REVISION"],
+              "candidate_set_sha256": os.environ["CANDIDATE_DIGEST"],
+              "codex_job_result": os.environ["CODEX_JOB_RESULT"],
+              "codex_invoked": os.environ["CODEX_JOB_RESULT"] != "skipped",
+              "recommendations_fabricated": False,
+              "authority": {
+                  "execution": "NONE",
+                  "merge": "NONE",
+                  "provider_mutation": "NONE",
+                  "training": "NONE",
+                  "promotion": "NONE",
+              },
+          }
+          canonical = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+          receipt["receipt_sha256"] = hashlib.sha256(canonical).hexdigest()
+          Path("reports/codex-frontier-run.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+
+      - name: Retain the exact source, model output, and loop receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.REVIEW_ARTIFACT }}
+          path: |
+            codex/frontier-review-input.json
+            reports/codex-frontier-source-receipt.json
+            reports/codex-result.raw.json
+            reports/codex-frontier-review.json
+            reports/codex-frontier-review-receipt.json
+            reports/codex-frontier-review.md
+            reports/codex-frontier-run.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Fail closed when a requested Codex pass was unavailable
+        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.result != 'success'
+        run: |
+          echo "::error::The candidate set required review, but Codex did not produce a verified proposal."
+          exit 1
