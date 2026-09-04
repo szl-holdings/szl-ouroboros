@@ -116,6 +116,8 @@ jobs:
       contents: read
     outputs:
       final_message: ${{ steps.codex.outputs.final-message }}
+      state: ${{ steps.codex_state.outputs.state }}
+      authority_available: ${{ steps.authority.outputs.available }}
     steps:
       - name: Harden runner before Codex removes privilege
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
@@ -134,19 +136,25 @@ jobs:
           name: ${{ env.INPUT_ARTIFACT }}
           path: .
 
-      - name: Require configured Codex API authority
+      - name: Detect optional Codex API authority
+        id: authority
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.CODEX_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
-          if [ -z "$OPENAI_API_KEY" ]; then
-            echo "::error::OPENAI_API_KEY or CODEX_API_KEY is not configured; refusing to fabricate a Codex review."
-            exit 2
+          if [ -n "$OPENAI_API_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "Codex API authority is configured."
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::OPENAI_API_KEY and CODEX_API_KEY are unavailable. The review will terminate with a signed, explicit unavailable receipt instead of a fabricated proposal or a recurring red schedule."
           fi
 
       - name: Execute Codex in a read-only disposable-runner sandbox
         id: codex
+        if: steps.authority.outputs.available == 'true'
+        continue-on-error: true
         uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
         with:
           prompt-file: codex/frontier-review-prompt.md
@@ -158,6 +166,25 @@ jobs:
           effort: high
           allow-bots: "true"
           allow-bot-users: "github-actions[bot]"
+
+      - name: Classify the Codex terminal state
+        id: codex_state
+        if: always()
+        env:
+          AUTHORITY_AVAILABLE: ${{ steps.authority.outputs.available }}
+          CODEX_OUTCOME: ${{ steps.codex.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$AUTHORITY_AVAILABLE" != "true" ]; then
+            state="CODEX_UNAVAILABLE_MISSING_AUTHORITY"
+          elif [ "$CODEX_OUTCOME" = "success" ]; then
+            state="CODEX_OUTPUT_AVAILABLE"
+          else
+            state="CODEX_ACTION_FAILED"
+          fi
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "Codex terminal state: $state"
 
   record:
     name: Deterministically verify and publish the review hold
@@ -214,6 +241,7 @@ jobs:
               "source_revision": os.environ["SOURCE_REVISION"],
               "candidate_set_sha256": os.environ["CANDIDATE_DIGEST"],
               "codex_invoked": False,
+              "recommendations_fabricated": False,
               "authority": {
                   "execution": "NONE",
                   "merge": "NONE",
@@ -230,7 +258,7 @@ jobs:
           PY
 
       - name: Materialize the Codex result without shell interpolation
-        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.result == 'success'
+        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.outputs.state == 'CODEX_OUTPUT_AVAILABLE'
         env:
           CODEX_RESULT: ${{ needs.codex.outputs.final_message }}
         shell: bash
@@ -248,7 +276,7 @@ jobs:
           PY
 
       - name: Validate citations, authority, and the Ouroboros receipt chain
-        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.result == 'success'
+        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.outputs.state == 'CODEX_OUTPUT_AVAILABLE'
         run: |
           set -euo pipefail
           python scripts/validate_codex_frontier_review.py \
@@ -262,7 +290,7 @@ jobs:
           git diff --check
 
       - name: Create exactly one human-review issue for this candidate set
-        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.result == 'success'
+        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.outputs.state == 'CODEX_OUTPUT_AVAILABLE'
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_DIGEST: ${{ needs.snapshot.outputs.candidate_digest }}
@@ -281,12 +309,14 @@ jobs:
           fi
 
       - name: Record an explicit unavailable Codex pass
-        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.result != 'success'
+        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.outputs.state != 'CODEX_OUTPUT_AVAILABLE'
         shell: bash
         env:
           CANDIDATE_DIGEST: ${{ needs.snapshot.outputs.candidate_digest }}
           SOURCE_REVISION: ${{ needs.snapshot.outputs.source_revision }}
           CODEX_JOB_RESULT: ${{ needs.codex.result }}
+          CODEX_STATE: ${{ needs.codex.outputs.state }}
+          AUTHORITY_AVAILABLE: ${{ needs.codex.outputs.authority_available }}
         run: |
           set -euo pipefail
           mkdir -p reports
@@ -296,15 +326,18 @@ jobs:
           import os
           from pathlib import Path
 
+          state = os.environ.get("CODEX_STATE") or "CODEX_PIPELINE_FAILED"
           receipt = {
               "schema": "szl.ouroboros.codex-frontier-run/v1",
-              "state": "CODEX_UNAVAILABLE",
+              "state": state,
               "source_repository": "szl-holdings/szl-second-brain",
               "source_revision": os.environ["SOURCE_REVISION"],
               "candidate_set_sha256": os.environ["CANDIDATE_DIGEST"],
               "codex_job_result": os.environ["CODEX_JOB_RESULT"],
-              "codex_invoked": os.environ["CODEX_JOB_RESULT"] != "skipped",
+              "codex_authority_available": os.environ.get("AUTHORITY_AVAILABLE") == "true",
+              "codex_invoked": state == "CODEX_ACTION_FAILED",
               "recommendations_fabricated": False,
+              "terminal_without_red_schedule": state == "CODEX_UNAVAILABLE_MISSING_AUTHORITY",
               "authority": {
                   "execution": "NONE",
                   "merge": "NONE",
@@ -336,8 +369,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      - name: Fail closed when a requested Codex pass was unavailable
-        if: needs.snapshot.outputs.should_run == 'true' && needs.codex.result != 'success'
+      - name: Fail closed when configured Codex execution failed
+        if: needs.snapshot.outputs.should_run == 'true' && (needs.codex.result != 'success' || needs.codex.outputs.state == 'CODEX_ACTION_FAILED')
         run: |
-          echo "::error::The candidate set required review, but Codex did not produce a verified proposal."
+          echo "::error::Codex authority was available or the pipeline started, but no verified proposal was produced."
           exit 1
