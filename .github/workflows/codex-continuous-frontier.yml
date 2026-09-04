@@ -1,0 +1,250 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Ouroboros Codex continuous frontier review
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/codex-continuous-frontier.yml"
+      - "prompts/codex-frontier-review.md"
+      - "schemas/codex-frontier-review.schema.json"
+      - "scripts/prepare_codex_frontier_review.py"
+      - "scripts/finalize_codex_frontier_review.py"
+      - "tests/test_continuous_frontier_review.py"
+  schedule:
+    - cron: "47 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Reason for this bounded frontier review"
+        required: false
+        default: "manual frontier review"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ouroboros-codex-frontier-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Prove bounded Codex/Ouroboros contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate scripts, schema, and focused boundaries
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/torch-ext
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "pytest==8.3.5" "ruff==0.12.12"
+          python -m json.tool schemas/codex-frontier-review.schema.json >/dev/null
+          python -m py_compile \
+            scripts/prepare_codex_frontier_review.py \
+            scripts/finalize_codex_frontier_review.py \
+            tests/test_continuous_frontier_review.py
+          ruff check \
+            scripts/prepare_codex_frontier_review.py \
+            scripts/finalize_codex_frontier_review.py \
+            tests/test_continuous_frontier_review.py \
+            --select E9,F
+          python -m pytest -q tests/test_continuous_frontier_review.py tests/test_ouroboros.py
+          git diff --check
+
+  review:
+    name: Run the two-hour read-only Codex review loop
+    if: github.event_name != 'pull_request'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      PYTHONPATH: ${{ github.workspace }}/torch-ext
+      SOURCE_RECEIPT: inputs/source-receipt.json
+      CANDIDATES: inputs/frontier-candidates.public.jsonl
+      CODEX_REVIEW: outputs/codex-review.json
+      LOOP_RECEIPT: outputs/ouroboros-frontier-loop-receipt.json
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout protected kernel source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the offline verifier toolchain
+        run: >-
+          python -m pip install --disable-pip-version-check --no-cache-dir
+          "pytest==8.3.5"
+
+      - name: Start the measured bounded loop
+        shell: bash
+        run: |
+          set -euo pipefail
+          date +%s%3N > /tmp/ouroboros-wall-start-ms
+          mkdir -p inputs outputs
+
+      - name: Prepare exact Second Brain frontier input
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/prepare_codex_frontier_review.py --output inputs
+          python -m pytest -q tests/test_continuous_frontier_review.py tests/test_ouroboros.py
+          date +%s%3N > /tmp/codex-start-ms
+
+      - name: Detect configured Codex authority without revealing it
+        id: key
+        shell: bash
+        env:
+          CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.CODEX_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CODEX_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "Codex API authority is configured."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No OPENAI_API_KEY or CODEX_API_KEY is configured; the loop will emit an explicit unavailable receipt."
+          fi
+
+      - name: Run Codex as a read-only advisory reviewer
+        id: codex
+        if: steps.key.outputs.present == 'true'
+        continue-on-error: true
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY || secrets.CODEX_API_KEY }}
+          prompt-file: prompts/codex-frontier-review.md
+          output-file: outputs/codex-review.json
+          output-schema-file: schemas/codex-frontier-review.schema.json
+          permission-profile: ":read-only"
+          safety-strategy: drop-sudo
+          codex-version: "0.138.0"
+          codex-args: '["--ephemeral"]'
+          effort: high
+          allow-bots: true
+          allow-bot-users: github-actions[bot]
+
+      - name: Close the loop with an exact receipt
+        id: finalize
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          CODEX_ATTEMPTED: ${{ steps.key.outputs.present || 'false' }}
+          CODEX_OUTCOME: ${{ steps.codex.outcome || 'skipped' }}
+        run: |
+          set -euo pipefail
+          end_ms="$(date +%s%3N)"
+          wall_start="$(cat /tmp/ouroboros-wall-start-ms)"
+          codex_start="$(cat /tmp/codex-start-ms)"
+          wall_ms="$((end_ms - wall_start))"
+          if [ "$CODEX_ATTEMPTED" = "true" ]; then
+            codex_ms="$((end_ms - codex_start))"
+          else
+            codex_ms=0
+          fi
+          python scripts/finalize_codex_frontier_review.py \
+            --source-receipt "$SOURCE_RECEIPT" \
+            --candidates "$CANDIDATES" \
+            --review "$CODEX_REVIEW" \
+            --output "$LOOP_RECEIPT" \
+            --codex-attempted "$CODEX_ATTEMPTED" \
+            --codex-outcome "$CODEX_OUTCOME" \
+            --model "codex-cli-default" \
+            --latency-ms "$codex_ms" \
+            --wall-ms "$wall_ms"
+
+      - name: Publish the loop summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "$LOOP_RECEIPT" ]; then
+            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+          from pathlib import Path
+
+          receipt = json.loads(Path(os.environ["LOOP_RECEIPT"]).read_text(encoding="utf-8"))
+          loop = receipt["ouroboros"]
+          source = receipt["source"]
+          print("# Ouroboros Codex frontier review")
+          print()
+          print(f"- State: `{receipt['state']}`")
+          print(f"- Source revision: `{source['source_revision']}`")
+          print(f"- Candidate set: `{source['candidate_set_sha256']}`")
+          print(f"- Candidates: `{source['candidate_count']}`")
+          print(f"- Loop exit: `{loop['exit']}`")
+          print(f"- Within budget: `{loop['withinBudget']}`")
+          print(f"- Receipt closed: `{loop['receiptsInEqOut']}`")
+          print(f"- Receipt: `{receipt['receipt_sha256']}`")
+          print()
+          print("Codex is advisory only. No recommendation was executed, merged, trained, promoted, or deployed.")
+          PY
+          else
+            echo "# Ouroboros Codex frontier review" >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo "No loop receipt was produced; the final enforcement step will fail closed." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Retain the secret-free review and loop receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ouroboros-codex-frontier-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            inputs/source-receipt.json
+            outputs/codex-review.json
+            outputs/ouroboros-frontier-loop-receipt.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Enforce honest terminal state
+        if: always()
+        shell: bash
+        env:
+          CODEX_CONFIGURED: ${{ steps.key.outputs.present || 'false' }}
+          CODEX_OUTCOME: ${{ steps.codex.outcome || 'skipped' }}
+          FINALIZE_OUTCOME: ${{ steps.finalize.outcome || 'skipped' }}
+        run: |
+          set -euo pipefail
+          test -s "$LOOP_RECEIPT"
+          state="$(python -c 'import json,os; print(json.load(open(os.environ["LOOP_RECEIPT"]))["state"])')"
+          if [ "$CODEX_CONFIGURED" = "true" ]; then
+            test "$CODEX_OUTCOME" = "success"
+            test "$FINALIZE_OUTCOME" = "success"
+            case "$state" in
+              REVIEW_PROPOSED|NO_ACTION_RECOMMENDED|BLOCKED) ;;
+              *) echo "::error::Configured Codex did not produce a valid terminal review: $state"; exit 1 ;;
+            esac
+          else
+            test "$state" = "CODEX_UNAVAILABLE_MISSING_SECRET"
+          fi
