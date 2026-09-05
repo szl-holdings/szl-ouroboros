@@ -51,7 +51,7 @@ jobs:
           path: |
             ~/.cache/huggingface/hub
             ~/.cache/szl-open-reviewer
-          key: khipu-open-reviewer-v1-13c1a1993063e1dff92f7413ccf48eaca6d48efc8801ae9af35961ae3396623a-d172f3d3c8cdd194c3c47c71cb077ed6e61354a2d0f939ceeac0c8fd29999596
+          key: khipu-open-reviewer-v2-13c1a1993063e1dff92f7413ccf48eaca6d48efc8801ae9af35961ae3396623a-d172f3d3c8cdd194c3c47c71cb077ed6e61354a2d0f939ceeac0c8fd29999596
 
       - name: Install verified keyless runtime
         shell: bash
@@ -92,9 +92,9 @@ jobs:
             --output "$REVIEW_OUTPUT" \
             --execution-receipt "$OPEN_EXECUTION_RECEIPT" \
             --provider local-gguf \
-            --candidate-limit 24 \
-            --context-tokens 16384 \
-            --max-tokens 1800 \
+            --candidate-limit 12 \
+            --context-tokens 8192 \
+            --max-tokens 900 \
             --seed 749
           date +%s%3N > /tmp/wall-end-ms
 
