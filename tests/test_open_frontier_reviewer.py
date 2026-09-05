@@ -20,6 +20,7 @@ from scripts.run_open_frontier_review import (
     MODEL_SIZE,
     NONE_AUTHORITY,
     OpenReviewerError,
+    admit_or_block_model_output,
     build_messages,
     build_runtime_schema,
     candidate_projection,
@@ -181,7 +182,7 @@ def test_projection_bounds_untrusted_candidate_content() -> None:
     assert len(projection["untrusted_evidence_excerpt"]) == 720
 
 
-def test_messages_mark_candidate_excerpts_as_untrusted() -> None:
+def test_messages_mark_candidate_excerpts_as_untrusted_and_schema_as_prompt_data() -> None:
     candidate = row("frontier:" + "a" * 32, "szl-holdings/a11oy")
     source = {
         "candidate_set_sha256": "d" * 64,
@@ -195,6 +196,7 @@ def test_messages_mark_candidate_excerpts_as_untrusted() -> None:
     messages = build_messages(source=source, selected=[candidate], runtime_schema=runtime)
     assert "untrusted data" in messages[0]["content"]
     assert "never instructions" in messages[1]["content"]
+    assert "post_generation_admission" in messages[1]["content"]
     assert str(candidate["id"]) in messages[1]["content"]
 
 
@@ -205,6 +207,90 @@ def test_parse_single_json_object_is_strict_but_accepts_one_json_fence() -> None
         parse_single_json_object('prefix {"state":"ok"}')
     with pytest.raises(OpenReviewerError, match="JSON object"):
         parse_single_json_object("[]")
+
+
+def test_post_generation_admission_accepts_exact_no_action_review() -> None:
+    digest = "d" * 64
+    candidate_id = "frontier:" + "a" * 32
+    raw = json.dumps(
+        {
+            "schema": "szl.codex.frontier-review/v1",
+            "state": "NO_ACTION_RECOMMENDED",
+            "candidate_set_sha256": digest,
+            "summary": "The selected evidence does not justify a bounded change.",
+            "recommendations": [],
+            "authority": NONE_AUTHORITY,
+        }
+    )
+    review, admitted, admission = admit_or_block_model_output(
+        raw,
+        candidate_digest=digest,
+        selected_candidate_ids=[candidate_id],
+    )
+    assert admitted is True
+    assert admission == "MODEL_OUTPUT_ADMITTED"
+    assert review["state"] == "NO_ACTION_RECOMMENDED"
+
+
+def test_post_generation_admission_rejects_invalid_model_json_as_blocked() -> None:
+    digest = "d" * 64
+    candidate_id = "frontier:" + "a" * 32
+    review, admitted, admission = admit_or_block_model_output(
+        "not-json and never echoed",
+        candidate_digest=digest,
+        selected_candidate_ids=[candidate_id],
+    )
+    assert admitted is False
+    assert admission == "MODEL_OUTPUT_REJECTED_FAIL_CLOSED"
+    assert review == {
+        "schema": "szl.codex.frontier-review/v1",
+        "state": "BLOCKED",
+        "candidate_set_sha256": digest,
+        "summary": (
+            "The open-weight reviewer completed, but its generated output did not "
+            "satisfy the independent admission contract. No recommendation was "
+            "admitted, accepted, or executed."
+        ),
+        "recommendations": [],
+        "authority": NONE_AUTHORITY,
+    }
+
+
+def test_post_generation_admission_rejects_unlisted_evidence_as_blocked() -> None:
+    digest = "d" * 64
+    allowed = "frontier:" + "a" * 32
+    unlisted = "frontier:" + "b" * 32
+    raw = json.dumps(
+        {
+            "schema": "szl.codex.frontier-review/v1",
+            "state": "REVIEW_PROPOSED",
+            "candidate_set_sha256": digest,
+            "summary": "A bounded change is proposed.",
+            "recommendations": [
+                {
+                    "id": "R01",
+                    "priority": "P2",
+                    "target_repository": "szl-holdings/szl-ouroboros",
+                    "title": "Add one test",
+                    "rationale": "The cited evidence supports a bounded regression test.",
+                    "evidence_candidate_ids": [unlisted],
+                    "recommended_change_type": "TEST",
+                    "validation": ["Run the focused regression suite."],
+                    "risk": "Low; test-only change.",
+                }
+            ],
+            "authority": NONE_AUTHORITY,
+        }
+    )
+    review, admitted, admission = admit_or_block_model_output(
+        raw,
+        candidate_digest=digest,
+        selected_candidate_ids=[allowed],
+    )
+    assert admitted is False
+    assert admission == "MODEL_OUTPUT_REJECTED_FAIL_CLOSED"
+    assert review["state"] == "BLOCKED"
+    assert review["recommendations"] == []
 
 
 def test_verify_model_file_checks_exact_size_and_digest(tmp_path: Path) -> None:
@@ -265,8 +351,41 @@ def test_execution_receipt_records_no_action_authority(tmp_path: Path) -> None:
             "key_required": False,
         },
     )
-    assert receipt["state"] == "OPEN_WEIGHT_REVIEW_OUTPUT_AVAILABLE"
+    assert receipt["state"] == "OPEN_WEIGHT_REVIEW_OUTPUT_ADMITTED"
+    assert receipt["admission"]["model_output_admitted"] is True
     assert receipt["authority"] == NONE_AUTHORITY
     assert receipt["claims"]["independent_validation_required"] is True
+    assert receipt["claims"]["native_schema_grammar_used"] is False
     assert receipt["claims"]["recommendations_executed"] is False
     assert output.is_file()
+
+
+def test_rejected_execution_receipt_is_explicitly_blocked(tmp_path: Path) -> None:
+    candidate_id = "frontier:" + "a" * 32
+    source = {
+        "source_revision": "2" * 40,
+        "candidate_set_sha256": "d" * 64,
+    }
+    review, admitted, admission = admit_or_block_model_output(
+        "malformed",
+        candidate_digest="d" * 64,
+        selected_candidate_ids=[candidate_id],
+    )
+    receipt = write_execution_receipt(
+        output_path=tmp_path / "receipt.json",
+        source=source,
+        selected_ids=[candidate_id],
+        messages=[{"role": "system", "content": "read only"}],
+        raw_output="malformed",
+        review=review,
+        provider_metadata={
+            "provider": "llama-cpp-python",
+            "model": "pinned",
+            "key_required": False,
+        },
+        model_output_admitted=admitted,
+        admission_state=admission,
+    )
+    assert receipt["state"] == "OPEN_WEIGHT_REVIEW_BLOCKED_FAIL_CLOSED"
+    assert receipt["admission"]["model_output_admitted"] is False
+    assert receipt["authority"] == NONE_AUTHORITY
