@@ -1,7 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
-name: Ouroboros Codex continuous frontier review
+name: Ouroboros continuous frontier review
 
-on:
+"on":
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/codex-continuous-frontier.yml"
+      - "prompts/codex-frontier-review.md"
+      - "schemas/codex-frontier-review.schema.json"
+      - "scripts/prepare_codex_frontier_review.py"
+      - "scripts/finalize_codex_frontier_review.py"
+      - "scripts/fetch_verified_llama_cpp_wheel.py"
+      - "scripts/run_open_frontier_review.py"
+      - "tests/test_continuous_frontier_review.py"
+      - "tests/test_open_frontier_reviewer.py"
   pull_request:
     paths:
       - ".github/workflows/codex-continuous-frontier.yml"
@@ -9,7 +22,10 @@ on:
       - "schemas/codex-frontier-review.schema.json"
       - "scripts/prepare_codex_frontier_review.py"
       - "scripts/finalize_codex_frontier_review.py"
+      - "scripts/fetch_verified_llama_cpp_wheel.py"
+      - "scripts/run_open_frontier_review.py"
       - "tests/test_continuous_frontier_review.py"
+      - "tests/test_open_frontier_reviewer.py"
   schedule:
     - cron: "47 */2 * * *"
   workflow_dispatch:
@@ -23,12 +39,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ouroboros-codex-frontier-${{ github.event_name }}-${{ github.ref }}
+  group: ouroboros-frontier-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   contract:
-    name: Prove bounded Codex/Ouroboros contracts
+    name: Prove bounded open-reviewer/Ouroboros contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
@@ -54,42 +70,56 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/torch-ext
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check --no-cache-dir "pytest==8.3.5" "ruff==0.12.12"
+          python -m pip install --disable-pip-version-check --no-cache-dir \
+            "pytest==8.3.5" "ruff==0.12.12"
           python -m json.tool schemas/codex-frontier-review.schema.json >/dev/null
           python -m py_compile \
             scripts/prepare_codex_frontier_review.py \
             scripts/finalize_codex_frontier_review.py \
-            tests/test_continuous_frontier_review.py
+            scripts/fetch_verified_llama_cpp_wheel.py \
+            scripts/run_open_frontier_review.py \
+            tests/test_continuous_frontier_review.py \
+            tests/test_open_frontier_reviewer.py
           ruff check \
             scripts/prepare_codex_frontier_review.py \
             scripts/finalize_codex_frontier_review.py \
+            scripts/fetch_verified_llama_cpp_wheel.py \
+            scripts/run_open_frontier_review.py \
             tests/test_continuous_frontier_review.py \
+            tests/test_open_frontier_reviewer.py \
             --select E9,F
-          python -m pytest -q tests/test_continuous_frontier_review.py tests/test_ouroboros.py
+          python -m pytest -q \
+            tests/test_continuous_frontier_review.py \
+            tests/test_open_frontier_reviewer.py \
+            tests/test_ouroboros.py
           git diff --check
 
   review:
-    name: Run the two-hour read-only Codex review loop
+    name: Run one read-only frontier review
     if: github.event_name != 'pull_request'
     needs: contract
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
     env:
       PYTHONPATH: ${{ github.workspace }}/torch-ext
+      HF_HUB_DISABLE_TELEMETRY: "1"
       SOURCE_RECEIPT: inputs/source-receipt.json
       CANDIDATES: inputs/frontier-candidates.public.jsonl
-      CODEX_REVIEW: outputs/codex-review.json
+      FRONTIER_STATE: inputs/frontier-state.v1.json
+      REVIEW_OUTPUT: outputs/codex-review.json
+      OPEN_EXECUTION_RECEIPT: outputs/open-reviewer-execution.json
       LOOP_RECEIPT: outputs/ouroboros-frontier-loop-receipt.json
+      OPEN_MODEL_LABEL: SZLHOLDINGS/SZL-Khipu-1.5B-GGUF@67d60ec577730747055491640cfb91fc4a4b5d25:SZL-Khipu-1.5B-Q4_K_M.gguf
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
           egress-policy: audit
 
-      - name: Checkout protected kernel source
+      - name: Checkout exact controller source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Set up Python
@@ -116,10 +146,12 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/prepare_codex_frontier_review.py --output inputs
-          python -m pytest -q tests/test_continuous_frontier_review.py tests/test_ouroboros.py
-          date +%s%3N > /tmp/codex-start-ms
+          python -m pytest -q \
+            tests/test_continuous_frontier_review.py \
+            tests/test_open_frontier_reviewer.py \
+            tests/test_ouroboros.py
 
-      - name: Detect configured Codex authority without revealing it
+      - name: Detect optional Codex authority without revealing it
         id: key
         shell: bash
         env:
@@ -128,11 +160,41 @@ jobs:
           set -euo pipefail
           if [ -n "$CODEX_API_KEY" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "Codex API authority is configured."
+            echo "Codex API authority is configured; the existing read-only lane will run."
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::No OPENAI_API_KEY or CODEX_API_KEY is configured; the loop will emit an explicit unavailable receipt."
+            echo "No Codex API authority is configured; the exact public Khipu GGUF will run keylessly."
           fi
+
+      - name: Cache exact public Khipu model and verified wheel
+        if: steps.key.outputs.present != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/huggingface/hub
+            ~/.cache/szl-open-reviewer
+          key: khipu-open-reviewer-v1-13c1a1993063e1dff92f7413ccf48eaca6d48efc8801ae9af35961ae3396623a-d172f3d3c8cdd194c3c47c71cb077ed6e61354a2d0f939ceeac0c8fd29999596
+
+      - name: Install verified keyless open-model runtime
+        if: steps.key.outputs.present != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel_path="$(
+            python scripts/fetch_verified_llama_cpp_wheel.py \
+              --directory "$HOME/.cache/szl-open-reviewer/wheels"
+          )"
+          python -m pip install --disable-pip-version-check --no-cache-dir \
+            "$wheel_path" "huggingface_hub==1.29.0"
+          python - <<'PY'
+          import llama_cpp
+          import huggingface_hub
+          print("verified open reviewer runtime", llama_cpp.__version__, huggingface_hub.__version__)
+          PY
+
+      - name: Start the measured reviewer attempt
+        shell: bash
+        run: date +%s%3N > /tmp/reviewer-start-ms
 
       - name: Run Codex as a read-only advisory reviewer
         id: codex
@@ -152,34 +214,62 @@ jobs:
           allow-bots: true
           allow-bot-users: github-actions[bot]
 
+      - name: Run exact Khipu GGUF as the keyless advisory reviewer
+        id: open_reviewer
+        if: steps.key.outputs.present != 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/run_open_frontier_review.py \
+            --state "$FRONTIER_STATE" \
+            --candidates "$CANDIDATES" \
+            --source-receipt "$SOURCE_RECEIPT" \
+            --schema schemas/codex-frontier-review.schema.json \
+            --output "$REVIEW_OUTPUT" \
+            --execution-receipt "$OPEN_EXECUTION_RECEIPT" \
+            --provider local-gguf \
+            --candidate-limit 24 \
+            --context-tokens 16384 \
+            --max-tokens 1800 \
+            --seed 749
+
       - name: Close the loop with an exact receipt
         id: finalize
         if: always()
         continue-on-error: true
         shell: bash
         env:
-          CODEX_ATTEMPTED: ${{ steps.key.outputs.present || 'false' }}
+          CODEX_CONFIGURED: ${{ steps.key.outputs.present || 'false' }}
           CODEX_OUTCOME: ${{ steps.codex.outcome || 'skipped' }}
+          OPEN_REVIEWER_OUTCOME: ${{ steps.open_reviewer.outcome || 'skipped' }}
         run: |
           set -euo pipefail
           end_ms="$(date +%s%3N)"
           wall_start="$(cat /tmp/ouroboros-wall-start-ms)"
-          codex_start="$(cat /tmp/codex-start-ms)"
+          reviewer_start="$(cat /tmp/reviewer-start-ms)"
           wall_ms="$((end_ms - wall_start))"
-          if [ "$CODEX_ATTEMPTED" = "true" ]; then
-            codex_ms="$((end_ms - codex_start))"
+          reviewer_ms="$((end_ms - reviewer_start))"
+
+          if [ "$CODEX_CONFIGURED" = "true" ]; then
+            attempted=true
+            outcome="$CODEX_OUTCOME"
+            model="codex-cli-default"
           else
-            codex_ms=0
+            attempted=true
+            outcome="$OPEN_REVIEWER_OUTCOME"
+            model="$OPEN_MODEL_LABEL"
           fi
+
           python scripts/finalize_codex_frontier_review.py \
             --source-receipt "$SOURCE_RECEIPT" \
             --candidates "$CANDIDATES" \
-            --review "$CODEX_REVIEW" \
+            --review "$REVIEW_OUTPUT" \
             --output "$LOOP_RECEIPT" \
-            --codex-attempted "$CODEX_ATTEMPTED" \
-            --codex-outcome "$CODEX_OUTCOME" \
-            --model "codex-cli-default" \
-            --latency-ms "$codex_ms" \
+            --codex-attempted "$attempted" \
+            --codex-outcome "$outcome" \
+            --model "$model" \
+            --latency-ms "$reviewer_ms" \
             --wall-ms "$wall_ms"
 
       - name: Publish the loop summary
@@ -196,9 +286,16 @@ jobs:
           receipt = json.loads(Path(os.environ["LOOP_RECEIPT"]).read_text(encoding="utf-8"))
           loop = receipt["ouroboros"]
           source = receipt["source"]
-          print("# Ouroboros Codex frontier review")
+          open_receipt_path = Path(os.environ["OPEN_EXECUTION_RECEIPT"])
+          provider = "openai-codex"
+          if open_receipt_path.is_file():
+              open_receipt = json.loads(open_receipt_path.read_text(encoding="utf-8"))
+              provider = open_receipt["provider"]["provider"]
+          print("# Ouroboros frontier review")
           print()
           print(f"- State: `{receipt['state']}`")
+          print(f"- Reviewer: `{provider}`")
+          print(f"- Model: `{receipt['codex']['model']}`")
           print(f"- Source revision: `{source['source_revision']}`")
           print(f"- Candidate set: `{source['candidate_set_sha256']}`")
           print(f"- Candidates: `{source['candidate_count']}`")
@@ -207,10 +304,10 @@ jobs:
           print(f"- Receipt closed: `{loop['receiptsInEqOut']}`")
           print(f"- Receipt: `{receipt['receipt_sha256']}`")
           print()
-          print("Codex is advisory only. No recommendation was executed, merged, trained, promoted, or deployed.")
+          print("The review is advisory only. No recommendation was executed, merged, trained, promoted, or deployed.")
           PY
           else
-            echo "# Ouroboros Codex frontier review" >> "$GITHUB_STEP_SUMMARY"
+            echo "# Ouroboros frontier review" >> "$GITHUB_STEP_SUMMARY"
             echo >> "$GITHUB_STEP_SUMMARY"
             echo "No loop receipt was produced; the final enforcement step will fail closed." >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -219,10 +316,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ouroboros-codex-frontier-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ouroboros-frontier-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             inputs/source-receipt.json
             outputs/codex-review.json
+            outputs/open-reviewer-execution.json
             outputs/ouroboros-frontier-loop-receipt.json
           if-no-files-found: warn
           retention-days: 90
@@ -233,6 +331,7 @@ jobs:
         env:
           CODEX_CONFIGURED: ${{ steps.key.outputs.present || 'false' }}
           CODEX_OUTCOME: ${{ steps.codex.outcome || 'skipped' }}
+          OPEN_REVIEWER_OUTCOME: ${{ steps.open_reviewer.outcome || 'skipped' }}
           FINALIZE_OUTCOME: ${{ steps.finalize.outcome || 'skipped' }}
         run: |
           set -euo pipefail
@@ -240,11 +339,12 @@ jobs:
           state="$(python -c 'import json,os; print(json.load(open(os.environ["LOOP_RECEIPT"]))["state"])')"
           if [ "$CODEX_CONFIGURED" = "true" ]; then
             test "$CODEX_OUTCOME" = "success"
-            test "$FINALIZE_OUTCOME" = "success"
-            case "$state" in
-              REVIEW_PROPOSED|NO_ACTION_RECOMMENDED|BLOCKED) ;;
-              *) echo "::error::Configured Codex did not produce a valid terminal review: $state"; exit 1 ;;
-            esac
           else
-            test "$state" = "CODEX_UNAVAILABLE_MISSING_SECRET"
+            test "$OPEN_REVIEWER_OUTCOME" = "success"
+            test -s "$OPEN_EXECUTION_RECEIPT"
           fi
+          test "$FINALIZE_OUTCOME" = "success"
+          case "$state" in
+            REVIEW_PROPOSED|NO_ACTION_RECOMMENDED|BLOCKED) ;;
+            *) echo "::error::Reviewer did not produce a valid terminal review: $state"; exit 1 ;;
+          esac
