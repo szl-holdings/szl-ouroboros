@@ -1,0 +1,13 @@
+{
+  "title": "szl-ouroboros — bounded loop-tax accounting (Kernel Hub package)",
+  "upload_type": "software",
+  "description": "Canonical GitHub source for the szl-ouroboros Kernel Hub package: bounded loop-tax accounting for agentic loops. Hub is the publish mirror. Doctrine v11.",
+  "creators": [{"name": "Lutar, Stephen P., Jr."}],
+  "license": {"id": "Apache-2.0"},
+  "keywords": ["governed-ai", "ouroboros", "loop-tax", "agentic-ai", "szl-holdings"],
+  "related_identifiers": [
+    {"identifier": "10.5281/zenodo.19944926", "relation": "isSupplementTo", "scheme": "doi"},
+    {"identifier": "https://huggingface.co/SZLHOLDINGS/szl-ouroboros", "relation": "isDocumentedBy", "scheme": "url"}
+  ],
+  "notes": "NEW work per the szl-papers deposit policy. Mint via GitHub release after enabling this repo in the owner's Zenodo account."
+}
