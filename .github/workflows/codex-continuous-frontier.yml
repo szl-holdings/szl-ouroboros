@@ -2,6 +2,19 @@
 name: Ouroboros continuous frontier review
 
 "on":
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/codex-continuous-frontier.yml"
+      - "prompts/codex-frontier-review.md"
+      - "schemas/codex-frontier-review.schema.json"
+      - "scripts/prepare_codex_frontier_review.py"
+      - "scripts/finalize_codex_frontier_review.py"
+      - "scripts/fetch_verified_llama_cpp_wheel.py"
+      - "scripts/run_open_frontier_review.py"
+      - "tests/test_continuous_frontier_review.py"
+      - "tests/test_open_frontier_reviewer.py"
   pull_request:
     paths:
       - ".github/workflows/codex-continuous-frontier.yml"
