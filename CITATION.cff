@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "szl-ouroboros — bounded loop-tax accounting (Kernel Hub package)"
+authors:
+  - family-names: Lutar
+    given-names: Stephen Paul
+license: Apache-2.0
+url: "https://huggingface.co/SZLHOLDINGS/szl-ouroboros"
+repository-code: "https://github.com/szl-holdings/szl-ouroboros"
