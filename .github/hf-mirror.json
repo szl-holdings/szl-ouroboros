@@ -1,0 +1,31 @@
+{
+    "$comment":  "SZL Holdings GitHub -\u003e Hugging Face mirror map. Org casing is literal: SZLHOLDINGS.",
+    "targets":  [
+                    {
+                        "slug":  "ouroboros",
+                        "hf_repo_id":  "SZLHOLDINGS/szl-ouroboros",
+                        "repo_type":  "model",
+                        "subdirectory":  ".",
+                        "card_template":  "",
+                        "mirror_on_push":  false,
+                        "$why_no_push_lane":  "hub-sync propagates deletions. This Hub repo holds artifacts absent from the GitHub tree, including the Kernel Hub build and the measured receipts. Release-only and additive; the card is loaded from the Hub so curated front matter survives.",
+                        "hub_only_paths":  [
+                                               "bom/",
+                                               "build/",
+                                               "card/",
+                                               "scripts/",
+                                               "tests/",
+                                               "BENCH.laptop-blackwell.json",
+                                               "MODEL_PROVENANCE.json",
+                                               "OPERATIONAL.json",
+                                               "PROMOTION_READINESS_AUDIT.json",
+                                               "SZL_ESTATE_MANAGED.json",
+                                               "TRAINING_RECEIPT.json",
+                                               "SECURITY.md",
+                                               "build.toml",
+                                               "og-card.png",
+                                               "ouroboros.py"
+                                           ]
+                    }
+                ]
+}
