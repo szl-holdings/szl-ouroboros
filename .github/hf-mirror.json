@@ -1,31 +1,60 @@
 {
-    "$comment":  "SZL Holdings GitHub -\u003e Hugging Face mirror map. Org casing is literal: SZLHOLDINGS.",
-    "targets":  [
-                    {
-                        "slug":  "ouroboros",
-                        "hf_repo_id":  "SZLHOLDINGS/szl-ouroboros",
-                        "repo_type":  "model",
-                        "subdirectory":  ".",
-                        "card_template":  "",
-                        "mirror_on_push":  false,
-                        "$why_no_push_lane":  "hub-sync propagates deletions. This Hub repo holds artifacts absent from the GitHub tree, including the Kernel Hub build and the measured receipts. Release-only and additive; the card is loaded from the Hub so curated front matter survives.",
-                        "hub_only_paths":  [
-                                               "bom/",
-                                               "build/",
-                                               "card/",
-                                               "scripts/",
-                                               "tests/",
-                                               "BENCH.laptop-blackwell.json",
-                                               "MODEL_PROVENANCE.json",
-                                               "OPERATIONAL.json",
-                                               "PROMOTION_READINESS_AUDIT.json",
-                                               "SZL_ESTATE_MANAGED.json",
-                                               "TRAINING_RECEIPT.json",
-                                               "SECURITY.md",
-                                               "build.toml",
-                                               "og-card.png",
-                                               "ouroboros.py"
-                                           ]
-                    }
-                ]
+  "$comment": "SZL Holdings GitHub -> Hugging Face mirror map. Consumed by .github/workflows/hf-mirror.yml. Org casing is literal: SZLHOLDINGS.",
+  "targets": [
+    {
+      "slug": "ouroboros",
+      "hf_repo_id": "SZLHOLDINGS/szl-ouroboros",
+      "oidc_resource": "SZLHOLDINGS/szl-ouroboros",
+      "repo_type": "model",
+      "subdirectory": ".",
+      "card_template": "",
+      "mirror_on_push": false,
+      "preserve_hub_card": true,
+      "required_card_metadata": {
+        "library_name": "kernels",
+        "license": "apache-2.0"
+      },
+      "required_card_tags": ["doi:10.5281/zenodo.19944926"],
+      "preserve_hub_paths": [
+        ".gitattributes",
+        "BENCH.laptop-blackwell.json",
+        "MODEL_PROVENANCE.json",
+        "OPERATIONAL.json",
+        "PROMOTION_READINESS_AUDIT.json",
+        "SZL_ESTATE_MANAGED.json",
+        "TRAINING_RECEIPT.json",
+        "bom/model-bom.cdx.json",
+        "card/holo-banner.svg",
+        "og-card.png",
+        "ouroboros.py",
+        "LICENSE",
+        "SECURITY.md",
+        "build.toml",
+        "build/torch-universal/szl_ouroboros/metadata.json",
+        "scripts/eval.py",
+        "scripts/forge.py",
+        "tests/test_ouroboros.py"
+      ],
+      "$why_preserve_hub_paths": "Derived from Hub main 40381c985b1eaebd5007626c0c58e25838d32389 (20 files) on 2026-09-25. The first 11 entries exist only on the Hub. The last 7 also exist on GitHub with different bytes; the Hub copy is kept and never overwritten, so the mirror changes only README.md (release block) and adds new files. Reconciling those 7 is an owner decision for a separate reviewed Hub PR with an exact parent_commit.",
+      "$why_no_push_lane": "hub-sync propagates deletions. This Hub repo holds artifacts absent from the GitHub tree, including the Kernel Hub build and the measured receipts. Release-only and additive; the card is loaded from the Hub so curated front matter survives.",
+      "hub_only_paths": [
+        "bom/",
+        "build/",
+        "card/",
+        "scripts/",
+        "tests/",
+        ".gitattributes",
+        "BENCH.laptop-blackwell.json",
+        "MODEL_PROVENANCE.json",
+        "OPERATIONAL.json",
+        "PROMOTION_READINESS_AUDIT.json",
+        "SZL_ESTATE_MANAGED.json",
+        "TRAINING_RECEIPT.json",
+        "SECURITY.md",
+        "build.toml",
+        "og-card.png",
+        "ouroboros.py"
+      ]
+    }
+  ]
 }
