@@ -25,12 +25,12 @@ assert _spec and _spec.loader
 mirror = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mirror)
 
-# Pins proven by szl-holdings/szl-lambda-gate@29a0bd9 (run 36154245684).
+# Pins proven by szl-holdings/szl-lambda-gate@29a0bd9 (run 36154245684) and kept by
+# the v2 lane at szl-lambda-gate@cf692173. The hub-sync pin is gone with the push lane.
 PROVEN_PINS = {
     "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
     "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-    "huggingface/hub-sync@fdffea8e04104d0bd4e3181c5feb3025f0433ff5",
 }
 
 
@@ -76,6 +76,8 @@ def test_target_is_derived_from_live_hub_card() -> None:
     assert item["preserve_hub_card"] is True
     assert item["required_card_metadata"] == {"library_name": "kernels", "license": "apache-2.0"}
     assert item["required_card_tags"] == ["doi:10.5281/zenodo.19944926"]
+    # Strict additive rule: no Hub file may be replaced by a release.
+    assert item["replace_hub_paths"] == []
 
 
 def test_preserve_paths_are_exact_unique_safe_files() -> None:
