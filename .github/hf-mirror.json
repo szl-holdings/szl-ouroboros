@@ -35,8 +35,10 @@
         "scripts/forge.py",
         "tests/test_ouroboros.py"
       ],
+      "replace_hub_paths": [],
+      "$why_replace": "Empty keeps the strict additive-only rule: any staged file whose bytes differ from its Hub copy fails closed at preflight. The seven differing paths above stay preserved. Adding a path here is an owner decision; README.md is rendered and can never be listed, and a path cannot be both preserved and replaced.",
       "$why_preserve_hub_paths": "Derived from Hub main 40381c985b1eaebd5007626c0c58e25838d32389 (20 files) on 2026-09-25. The first 11 entries exist only on the Hub. The last 7 also exist on GitHub with different bytes; the Hub copy is kept and never overwritten, so the mirror changes only README.md (release block) and adds new files. Reconciling those 7 is an owner decision for a separate reviewed Hub PR with an exact parent_commit.",
-      "$why_no_push_lane": "hub-sync propagates deletions. This Hub repo holds artifacts absent from the GitHub tree, including the Kernel Hub build and the measured receipts. Release-only and additive; the card is loaded from the Hub so curated front matter survives.",
+      "$why_no_push_lane": "hub-sync propagates deletions. This Hub repo holds artifacts absent from the GitHub tree, including the Kernel Hub build and the measured receipts. The push lane has been removed from hf-mirror.yml and the plan job fails closed if any target sets mirror_on_push to anything other than false. Release-only and additive; the card is loaded from the Hub so curated front matter survives.",
       "hub_only_paths": [
         "bom/",
         "build/",
