@@ -106,12 +106,31 @@ the active `szl_ouroboros.build_loop_trace` kernel. Each receipt must prove:
 
 ## Load
 
+Set `SZL_OUROBOROS_HF_REVISION` to the immutable **first-class Kernel Hub** commit
+from a verified publication of [`kernels/SZLHOLDINGS/szl-ouroboros`](https://huggingface.co/kernels/SZLHOLDINGS/szl-ouroboros). Use the `kernels`
+client version qualified with that publication. The GitHub source commit,
+model-type mirror commit, and Kernel Hub commit are separate identities.
+An observed head, a branch name, or a successful import does not qualify a release.
+
+`trust_remote_code=True` permits execution of the selected repository's Python.
+Review that exact revision, its provenance and publication evidence before enabling it.
+The format check below only rejects missing or mutable revision inputs; it does not
+verify hashes, publisher authorization or compatibility. If that evidence is unavailable,
+stop the Hub load and use separately reviewed local source for development.
+
 ```python
+import os
+import re
+
+hf_revision = os.environ.get("SZL_OUROBOROS_HF_REVISION", "")
+if re.fullmatch(r"[0-9a-f]{40}", hf_revision) is None:
+    raise ValueError("A verified immutable Kernel Hub revision is required")
+
 from kernels import get_kernel
 
 ouroboros = get_kernel(
     "SZLHOLDINGS/szl-ouroboros",
-    revision="main",
+    revision=hf_revision,
     trust_remote_code=True,
 )
 trace = ouroboros.build_loop_trace(
@@ -132,3 +151,22 @@ assert trace["receiptsInEqOut"] is True
 
 Doctrine v11. Lambda = Conjecture 1, advisory and never a theorem. Apache-2.0.
 Owner: Stephen Lutar / SZL Holdings.
+
+## Source-only development
+
+Review [`torch-ext/szl_ouroboros/`](https://github.com/szl-holdings/szl-ouroboros/tree/f4c9df3840a84c767b7e5fa1c29aa25f00cc0457/torch-ext/szl_ouroboros)
+at that immutable GitHub source revision, separately from any Hub release.
+With the source's dependencies already available, run from the reviewed checkout root:
+
+```python
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path("torch-ext").resolve()))
+import szl_ouroboros as local_kernel
+```
+
+This selects local Python source rather than calling the Hub loader. Importing local
+source also executes Python. This documentation check does not run that import,
+install dependencies, qualify a runtime or establish a Hub publication.
+
