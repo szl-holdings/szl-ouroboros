@@ -10,6 +10,12 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9"
 
+[project.urls]
+Homepage = "https://github.com/szl-holdings/szl-ouroboros"
+Source = "https://github.com/szl-holdings/szl-ouroboros"
+Issues = "https://github.com/szl-holdings/szl-ouroboros/issues"
+Changelog = "https://github.com/szl-holdings/szl-ouroboros/releases"
+
 [tool.setuptools]
 package-dir = {"" = "torch-ext"}
 packages = ["szl_ouroboros"]
@@ -19,3 +25,6 @@ szl_ouroboros = ["metadata.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.szl.release]
+import_names = ["szl_ouroboros"] # wheel top-level import names; the release gate fails if the built wheel differs
