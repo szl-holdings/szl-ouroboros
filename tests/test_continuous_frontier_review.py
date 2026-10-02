@@ -46,6 +46,7 @@ def source_identities() -> list[dict[str, str]]:
         {"source_id": "living_anatomy", "repository": "szl-holdings/anatomy", "path": "README.md", "parser": "markdown"},
         {"source_id": "nemo_witness", "repository": "szl-holdings/szl-nemo", "path": "README.md", "parser": "markdown"},
         {"source_id": "ouroboros_runtime", "repository": "szl-holdings/szl-ouroboros", "path": "README.md", "parser": "markdown"},
+        {"source_id": "science_forum_pilot", "repository": "szl-holdings/szl-science-forum-corpus", "path": "dataset/sources.public.jsonl", "parser": "forum_pilot"},
     ]
 
 
@@ -58,7 +59,7 @@ def packet_bytes() -> tuple[bytes, bytes, str]:
         "state": "REVIEW_REQUIRED",
         "candidate_count": 1,
         "candidate_set_sha256": digest,
-        "source_count": 7,
+        "source_count": 8,
         "sources": source_identities(),
         "public_content_access": "HANDLES_ONLY",
         "controller_content_access": "AUTHORIZED_CONTROLLER_ONLY",
@@ -93,7 +94,7 @@ def write_finalize_fixture(root: Path) -> tuple[Path, Path, Path, str]:
                 "candidates_sha256": hashlib.sha256(candidates_raw).hexdigest(),
                 "candidate_count": 1,
                 "candidate_set_sha256": digest,
-                "source_count": 7,
+                "source_count": 8,
                 "candidate_state": "DISCOVERED_REVIEW_REQUIRED",
                 "content_scope": "PUBLIC_SOURCE_REVIEW_MATERIAL",
                 "authority": {
@@ -119,15 +120,15 @@ def test_prepare_validates_exact_candidate_digest_and_authority() -> None:
     assert rows == [candidate()]
 
 
-def test_prepare_rejects_stale_six_source_contract() -> None:
+def test_prepare_rejects_stale_seven_source_contract() -> None:
     state_raw, candidates_raw, _digest = packet_bytes()
     state = json.loads(state_raw)
-    state["source_count"] = 6
+    state["source_count"] = 7
     with pytest.raises(PacketError, match="source count drifted"):
         validate_packet(json.dumps(state).encode(), candidates_raw)
 
 
-def test_prepare_requires_the_exact_seven_source_identities() -> None:
+def test_prepare_requires_the_exact_eight_source_identities() -> None:
     state_raw, candidates_raw, _digest = packet_bytes()
     state = json.loads(state_raw)
     state["sources"][0]["repository"] = "szl-holdings/other"
@@ -136,6 +137,14 @@ def test_prepare_requires_the_exact_seven_source_identities() -> None:
     state = json.loads(state_raw)
     state.pop("sources")
     with pytest.raises(PacketError, match="source list count mismatch"):
+        validate_packet(json.dumps(state).encode(), candidates_raw)
+    state = json.loads(state_raw)
+    state["sources"][7]["source_id"] = "ouroboros_runtime"
+    with pytest.raises(PacketError, match="source identity drifted"):
+        validate_packet(json.dumps(state).encode(), candidates_raw)
+    state = json.loads(state_raw)
+    state["sources"][7]["parser"] = "markdown"
+    with pytest.raises(PacketError, match="source identity drifted"):
         validate_packet(json.dumps(state).encode(), candidates_raw)
 
 
