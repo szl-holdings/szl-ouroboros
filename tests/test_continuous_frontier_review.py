@@ -37,6 +37,18 @@ def candidate(candidate_id: str = "frontier:" + "a" * 32) -> dict[str, object]:
     }
 
 
+def source_identities() -> list[dict[str, str]]:
+    return [
+        {"source_id": "a11oy_public_estate", "repository": "szl-holdings/a11oy", "path": "governance/public-estate.v1.json", "parser": "public_estate"},
+        {"source_id": "forge_production_controller", "repository": "szl-holdings/szl-forge", "path": "inference/production.py", "parser": "python_contract"},
+        {"source_id": "formula_quant_atlas", "repository": "szl-holdings/szl-formulas", "path": "atlas/formula-atlas.v1.json", "parser": "formula_atlas"},
+        {"source_id": "governed_kernel_suite", "repository": "szl-holdings/szl-kernels", "path": "README.md", "parser": "markdown"},
+        {"source_id": "living_anatomy", "repository": "szl-holdings/anatomy", "path": "README.md", "parser": "markdown"},
+        {"source_id": "nemo_witness", "repository": "szl-holdings/szl-nemo", "path": "README.md", "parser": "markdown"},
+        {"source_id": "ouroboros_runtime", "repository": "szl-holdings/szl-ouroboros", "path": "README.md", "parser": "markdown"},
+    ]
+
+
 def packet_bytes() -> tuple[bytes, bytes, str]:
     row = candidate()
     candidates = canonical_bytes(row) + b"\n"
@@ -47,6 +59,7 @@ def packet_bytes() -> tuple[bytes, bytes, str]:
         "candidate_count": 1,
         "candidate_set_sha256": digest,
         "source_count": 7,
+        "sources": source_identities(),
         "public_content_access": "HANDLES_ONLY",
         "controller_content_access": "AUTHORIZED_CONTROLLER_ONLY",
         "private_graph_nodes_loaded": 0,
@@ -111,6 +124,18 @@ def test_prepare_rejects_stale_six_source_contract() -> None:
     state = json.loads(state_raw)
     state["source_count"] = 6
     with pytest.raises(PacketError, match="source count drifted"):
+        validate_packet(json.dumps(state).encode(), candidates_raw)
+
+
+def test_prepare_requires_the_exact_seven_source_identities() -> None:
+    state_raw, candidates_raw, _digest = packet_bytes()
+    state = json.loads(state_raw)
+    state["sources"][0]["repository"] = "szl-holdings/other"
+    with pytest.raises(PacketError, match="source identity drifted"):
+        validate_packet(json.dumps(state).encode(), candidates_raw)
+    state = json.loads(state_raw)
+    state.pop("sources")
+    with pytest.raises(PacketError, match="source list count mismatch"):
         validate_packet(json.dumps(state).encode(), candidates_raw)
 
 
@@ -222,6 +247,77 @@ def test_finalize_missing_key_is_explicit_and_receipt_closed(tmp_path: Path) -> 
         "merge": "NONE",
         "provider_mutation": "NONE",
     }
+
+
+def test_finalize_keeps_codex_unavailable_separate_from_keyless_review(tmp_path: Path) -> None:
+    source, candidates, review_path, digest = write_finalize_fixture(tmp_path)
+    review_path.write_text(
+        json.dumps({
+            "schema": "szl.codex.frontier-review/v1",
+            "state": "NO_ACTION_RECOMMENDED",
+            "candidate_set_sha256": digest,
+            "summary": "The current evidence does not justify a bounded change.",
+            "recommendations": [],
+            "authority": {"training": "NONE", "promotion": "NONE", "execution": "NONE", "merge": "NONE", "provider_mutation": "NONE"},
+        }),
+        encoding="utf-8",
+    )
+    receipt = finalize(
+        source_receipt_path=source,
+        candidate_path=candidates,
+        review_path=review_path,
+        output_path=tmp_path / "loop-receipt.json",
+        codex_attempted=False,
+        codex_configured=False,
+        codex_outcome="skipped",
+        model="codex-default",
+        open_reviewer_attempted=True,
+        open_reviewer_outcome="success",
+        open_reviewer_model="pinned-gguf",
+        latency_ms=100.0,
+        wall_ms=120.0,
+    )
+    assert receipt["state"] == "NO_ACTION_RECOMMENDED"
+    assert receipt["codex"]["configured"] is False
+    assert receipt["codex"]["attempted"] is False
+    assert receipt["codex"]["review"] is None
+    assert receipt["open_reviewer"]["attempted"] is True
+    assert receipt["open_reviewer"]["review"]["state"] == "NO_ACTION_RECOMMENDED"
+    assert receipt["ouroboros"]["exit"] == "converged"
+
+
+def test_finalize_blocked_keyless_output_is_not_a_converged_review(tmp_path: Path) -> None:
+    source, candidates, review_path, digest = write_finalize_fixture(tmp_path)
+    review_path.write_text(
+        json.dumps({
+            "schema": "szl.codex.frontier-review/v1",
+            "state": "BLOCKED",
+            "candidate_set_sha256": digest,
+            "summary": "The model output was rejected by independent admission.",
+            "recommendations": [],
+            "authority": {"training": "NONE", "promotion": "NONE", "execution": "NONE", "merge": "NONE", "provider_mutation": "NONE"},
+        }),
+        encoding="utf-8",
+    )
+    receipt = finalize(
+        source_receipt_path=source,
+        candidate_path=candidates,
+        review_path=review_path,
+        output_path=tmp_path / "loop-receipt.json",
+        codex_attempted=False,
+        codex_configured=False,
+        codex_outcome="skipped",
+        model="codex-default",
+        open_reviewer_attempted=True,
+        open_reviewer_outcome="success",
+        open_reviewer_model="pinned-gguf",
+        latency_ms=100.0,
+        wall_ms=120.0,
+    )
+    assert receipt["state"] == "BLOCKED"
+    assert receipt["codex"]["attempted"] is False
+    assert receipt["open_reviewer"]["review"]["state"] == "BLOCKED"
+    assert receipt["ouroboros"]["exit"] == "error"
 
 
 def test_finalize_rejects_unknown_evidence_candidate(tmp_path: Path) -> None:

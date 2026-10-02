@@ -26,6 +26,21 @@ CANDIDATES_PATH = "data/frontier-candidates.public.jsonl"
 STATE_SCHEMA = "szl.second-brain.frontier-state/v1"
 CANDIDATE_SCHEMA = "szl.second-brain.frontier-candidate/v1"
 EXPECTED_PUBLIC_SOURCE_COUNT = 7  # live Second Brain packet: 6 original + ouroboros_runtime
+EXPECTED_PUBLIC_SOURCES = {
+    "a11oy_public_estate": (
+        "szl-holdings/a11oy", "governance/public-estate.v1.json", "public_estate"
+    ),
+    "forge_production_controller": (
+        "szl-holdings/szl-forge", "inference/production.py", "python_contract"
+    ),
+    "formula_quant_atlas": (
+        "szl-holdings/szl-formulas", "atlas/formula-atlas.v1.json", "formula_atlas"
+    ),
+    "governed_kernel_suite": ("szl-holdings/szl-kernels", "README.md", "markdown"),
+    "living_anatomy": ("szl-holdings/anatomy", "README.md", "markdown"),
+    "nemo_witness": ("szl-holdings/szl-nemo", "README.md", "markdown"),
+    "ouroboros_runtime": ("szl-holdings/szl-ouroboros", "README.md", "markdown"),
+}
 USER_AGENT = "szl-ouroboros-codex-frontier-review/1.0"
 MAX_STATE_BYTES = 512 * 1024
 MAX_CANDIDATE_BYTES = 4 * 1024 * 1024
@@ -180,7 +195,22 @@ def validate_packet(
     if required_source_count is not None and source_count != required_source_count:
         raise PacketError("frontier source count drifted")
     sources = state.get("sources")
-    if isinstance(sources, list) and sources and len(sources) != source_count:
+    if required_source_count == EXPECTED_PUBLIC_SOURCE_COUNT:
+        if not isinstance(sources, list) or len(sources) != source_count:
+            raise PacketError("frontier source list count mismatch")
+        observed = {}
+        for source in sources:
+            if not isinstance(source, dict):
+                raise PacketError("frontier source identity drifted")
+            source_id = source.get("source_id")
+            if not isinstance(source_id, str) or source_id in observed:
+                raise PacketError("frontier source identity drifted")
+            observed[source_id] = (
+                source.get("repository"), source.get("path"), source.get("parser")
+            )
+        if observed != EXPECTED_PUBLIC_SOURCES:
+            raise PacketError("frontier source identity drifted")
+    elif isinstance(sources, list) and sources and len(sources) != source_count:
         raise PacketError("frontier source list count mismatch")
 
     reject_secret_like_material(candidates_raw.decode("utf-8"))

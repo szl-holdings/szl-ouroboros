@@ -251,14 +251,12 @@ jobs:
           wall_ms="$((end_ms - wall_start))"
           reviewer_ms="$((end_ms - reviewer_start))"
 
+          codex_attempted=false
+          open_attempted=false
           if [ "$CODEX_CONFIGURED" = "true" ]; then
-            attempted=true
-            outcome="$CODEX_OUTCOME"
-            model="codex-cli-default"
+            if [ "$CODEX_OUTCOME" != "skipped" ]; then codex_attempted=true; fi
           else
-            attempted=true
-            outcome="$OPEN_REVIEWER_OUTCOME"
-            model="$OPEN_MODEL_LABEL"
+            if [ "$OPEN_REVIEWER_OUTCOME" != "skipped" ]; then open_attempted=true; fi
           fi
 
           python scripts/finalize_codex_frontier_review.py \
@@ -266,9 +264,13 @@ jobs:
             --candidates "$CANDIDATES" \
             --review "$REVIEW_OUTPUT" \
             --output "$LOOP_RECEIPT" \
-            --codex-attempted "$attempted" \
-            --codex-outcome "$outcome" \
-            --model "$model" \
+            --codex-configured "$CODEX_CONFIGURED" \
+            --codex-attempted "$codex_attempted" \
+            --codex-outcome "$CODEX_OUTCOME" \
+            --model "codex-cli-default" \
+            --open-reviewer-attempted "$open_attempted" \
+            --open-reviewer-outcome "$OPEN_REVIEWER_OUTCOME" \
+            --open-reviewer-model "$OPEN_MODEL_LABEL" \
             --latency-ms "$reviewer_ms" \
             --wall-ms "$wall_ms"
 
@@ -295,7 +297,11 @@ jobs:
           print()
           print(f"- State: `{receipt['state']}`")
           print(f"- Reviewer: `{provider}`")
-          print(f"- Model: `{receipt['codex']['model']}`")
+          reviewer = receipt["open_reviewer"] if receipt["open_reviewer"]["attempted"] else receipt["codex"]
+          print(f"- Model: `{reviewer['model'] or 'UNAVAILABLE'}`")
+          print(f"- Codex configured: `{receipt['codex']['configured']}`")
+          print(f"- Codex attempted: `{receipt['codex']['attempted']}`")
+          print(f"- Keyless reviewer attempted: `{receipt['open_reviewer']['attempted']}`")
           print(f"- Source revision: `{source['source_revision']}`")
           print(f"- Candidate set: `{source['candidate_set_sha256']}`")
           print(f"- Candidates: `{source['candidate_count']}`")
@@ -343,8 +349,8 @@ jobs:
             test "$OPEN_REVIEWER_OUTCOME" = "success"
             test -s "$OPEN_EXECUTION_RECEIPT"
           fi
-          test "$FINALIZE_OUTCOME" = "success"
           case "$state" in
-            REVIEW_PROPOSED|NO_ACTION_RECOMMENDED|BLOCKED) ;;
+            REVIEW_PROPOSED|NO_ACTION_RECOMMENDED) ;;
             *) echo "::error::Reviewer did not produce a valid terminal review: $state"; exit 1 ;;
           esac
+          test "$FINALIZE_OUTCOME" = "success"
