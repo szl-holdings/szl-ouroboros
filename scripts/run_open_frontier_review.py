@@ -361,12 +361,39 @@ def blocked_review(candidate_digest: str) -> dict[str, Any]:
     )
 
 
+def _safe_failure_code(error: Exception) -> str:
+    """Classify a rejection without retaining untrusted model text or error values."""
+    message = str(error)
+    if isinstance(error, OpenReviewerError):
+        if "byte ceiling" in message:
+            return "OUTPUT_TOO_LARGE"
+        if "must be a JSON object" in message:
+            return "OUTPUT_ROOT_NOT_OBJECT"
+        return "OUTPUT_NOT_SINGLE_JSON_OBJECT"
+    if isinstance(error, ReviewError):
+        for needle, code in (
+            ("candidate-set digest", "CANDIDATE_SET_DIGEST"),
+            ("evidence binding", "EVIDENCE_BINDING"),
+            ("mutation authority", "MUTATION_AUTHORITY"),
+            ("top-level fields", "TOP_LEVEL_FIELDS"),
+            ("fields do not match", "RECOMMENDATION_FIELDS"),
+            ("schema mismatch", "SCHEMA"),
+            ("state", "STATE"),
+            ("summary", "SUMMARY"),
+            ("recommendation", "RECOMMENDATION_CONTRACT"),
+        ):
+            if needle in message:
+                return code
+        return "REVIEW_CONTRACT"
+    return "INVALID_VALUE"
+
+
 def admit_or_block_model_output(
     raw_output: str,
     *,
     candidate_digest: str,
     selected_candidate_ids: list[str],
-) -> tuple[dict[str, Any], bool, str]:
+) -> tuple[dict[str, Any], bool, str, str | None]:
     """Admit exact compliant model JSON or close fail-closed as BLOCKED.
 
     A completed inference is not treated as a valid review merely because it
@@ -375,14 +402,23 @@ def admit_or_block_model_output(
     """
     try:
         parsed = parse_single_json_object(raw_output)
+    except OpenReviewerError as exc:
+        return (
+            blocked_review(candidate_digest), False,
+            "MODEL_OUTPUT_REJECTED_FAIL_CLOSED", _safe_failure_code(exc),
+        )
+    try:
         admitted = validate_review(
             parsed,
             expected_candidate_digest=candidate_digest,
             candidate_ids=set(selected_candidate_ids),
         )
-    except (OpenReviewerError, ReviewError, TypeError, ValueError):
-        return blocked_review(candidate_digest), False, "MODEL_OUTPUT_REJECTED_FAIL_CLOSED"
-    return admitted, True, "MODEL_OUTPUT_ADMITTED"
+    except (ReviewError, TypeError, ValueError) as exc:
+        return (
+            blocked_review(candidate_digest), False,
+            "MODEL_OUTPUT_REJECTED_FAIL_CLOSED", _safe_failure_code(exc),
+        )
+    return admitted, True, "MODEL_OUTPUT_ADMITTED", None
 
 
 def verify_model_file(
@@ -600,6 +636,7 @@ def write_execution_receipt(
     provider_metadata: dict[str, Any],
     model_output_admitted: bool = True,
     admission_state: str = "MODEL_OUTPUT_ADMITTED",
+    failure_code: str | None = None,
 ) -> dict[str, Any]:
     core: dict[str, Any] = {
         "schema": EXECUTION_SCHEMA,
@@ -618,6 +655,7 @@ def write_execution_receipt(
         "admission": {
             "state": admission_state,
             "model_output_admitted": model_output_admitted,
+            "failure_code": failure_code,
             "validator": "scripts.finalize_codex_frontier_review.validate_review",
             "validation_error_echoed": False,
         },
@@ -711,7 +749,7 @@ def main() -> int:
             seed=args.seed,
         )
 
-    review, admitted, admission_state = admit_or_block_model_output(
+    review, admitted, admission_state, failure_code = admit_or_block_model_output(
         raw_output,
         candidate_digest=str(source["candidate_set_sha256"]),
         selected_candidate_ids=selected_ids,
@@ -731,6 +769,7 @@ def main() -> int:
         provider_metadata=provider_metadata,
         model_output_admitted=admitted,
         admission_state=admission_state,
+        failure_code=failure_code,
     )
     print(
         json.dumps(
@@ -738,6 +777,7 @@ def main() -> int:
                 "state": receipt["state"],
                 "review_state": review["state"],
                 "admission_state": admission_state,
+                "failure_code": failure_code,
                 "provider": provider_metadata["provider"],
                 "model": provider_metadata["model"],
                 "candidate_set_sha256": source["candidate_set_sha256"],

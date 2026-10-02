@@ -248,6 +248,10 @@ def finalize(
     model: str,
     latency_ms: float,
     wall_ms: float,
+    codex_configured: bool | None = None,
+    open_reviewer_attempted: bool = False,
+    open_reviewer_outcome: str = "not_attempted",
+    open_reviewer_model: str = "",
 ) -> dict[str, Any]:
     source = read_json(source_receipt_path)
     if source.get("schema") != SOURCE_SCHEMA:
@@ -261,23 +265,40 @@ def finalize(
     if int(source.get("candidate_count") or -1) != len(candidate_ids):
         raise ReviewError("source receipt candidate count mismatch")
 
-    normalized_outcome = codex_outcome.strip().lower()
-    if not codex_attempted:
-        state = "CODEX_UNAVAILABLE_MISSING_SECRET"
+    configured = codex_attempted if codex_configured is None else codex_configured
+    if codex_attempted and not configured:
+        raise ReviewError("Codex attempt without configured authority")
+    if configured and open_reviewer_attempted:
+        raise ReviewError("fallback ran despite configured Codex authority")
+    if codex_attempted and open_reviewer_attempted:
+        raise ReviewError("two reviewer attempts cannot share one loop receipt")
+
+    codex_result = codex_outcome.strip().lower()
+    open_result = open_reviewer_outcome.strip().lower()
+    active = "codex" if configured else "open_reviewer" if open_reviewer_attempted else None
+    attempted = codex_attempted if configured else open_reviewer_attempted
+    outcome = codex_result if configured else open_result
+    active_model = (model or "codex-default") if configured else (
+        open_reviewer_model or "open-reviewer"
+    )
+    provider = "openai" if configured else "local-gguf"
+
+    if not attempted:
+        state = "CODEX_FAILED" if configured else "CODEX_UNAVAILABLE_MISSING_SECRET"
         review: dict[str, Any] | None = None
         review_sha = None
         attempts: list[dict[str, Any]] = []
         exit_state = "aborted"
         steps = 0
     else:
-        if normalized_outcome != "success":
-            state = "CODEX_FAILED"
+        if outcome != "success":
+            state = "CODEX_FAILED" if configured else "OPEN_REVIEWER_FAILED"
             review = None
             review_sha = None
             attempts = [
                 {
-                    "provider": "openai",
-                    "model": model or "codex-default",
+                    "provider": provider,
+                    "model": active_model,
                     "ok": False,
                     "latency_ms": max(0.0, latency_ms),
                     "node": "scheduled-frontier-review",
@@ -295,14 +316,14 @@ def finalize(
             state = str(review["state"])
             attempts = [
                 {
-                    "provider": "openai",
-                    "model": model or "codex-default",
-                    "ok": True,
+                    "provider": provider,
+                    "model": active_model,
+                    "ok": state != "BLOCKED",
                     "latency_ms": max(0.0, latency_ms),
                     "node": "scheduled-frontier-review",
                 }
             ]
-            exit_state = "converged"
+            exit_state = "error" if state == "BLOCKED" else "converged"
             steps = 1
 
     loop = ouroboros.build_loop_trace(
@@ -311,8 +332,8 @@ def finalize(
         exit=exit_state,
         max_budget=1,
         steps=steps,
-        aborted=not codex_attempted,
-        trace_labels=["codex-frontier-review"] if attempts else [],
+        aborted=not attempted,
+        trace_labels=[f"{active}-frontier-review"] if attempts else [],
     )
     if loop.get("withinBudget") is not True:
         raise ReviewError("Ouroboros loop exceeded its declared budget")
@@ -324,11 +345,19 @@ def finalize(
         "state": state,
         "source": source,
         "codex": {
+            "configured": configured,
             "attempted": codex_attempted,
-            "outcome": normalized_outcome if codex_attempted else "not_attempted",
-            "model": model or "codex-default",
-            "review_sha256": review_sha,
-            "review": review,
+            "outcome": codex_result if codex_attempted else "not_attempted",
+            "model": (model or "codex-default") if configured else None,
+            "review_sha256": review_sha if active == "codex" else None,
+            "review": review if active == "codex" else None,
+        },
+        "open_reviewer": {
+            "attempted": open_reviewer_attempted,
+            "outcome": open_result if open_reviewer_attempted else "not_attempted",
+            "model": active_model if open_reviewer_attempted else None,
+            "review_sha256": review_sha if active == "open_reviewer" else None,
+            "review": review if active == "open_reviewer" else None,
         },
         "ouroboros": loop,
         "authority": dict(NONE_AUTHORITY),
@@ -357,8 +386,12 @@ def main() -> int:
     parser.add_argument("--review", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--codex-attempted", choices=("true", "false"), required=True)
+    parser.add_argument("--codex-configured", choices=("true", "false"))
     parser.add_argument("--codex-outcome", default="not_attempted")
     parser.add_argument("--model", default="")
+    parser.add_argument("--open-reviewer-attempted", choices=("true", "false"), default="false")
+    parser.add_argument("--open-reviewer-outcome", default="not_attempted")
+    parser.add_argument("--open-reviewer-model", default="")
     parser.add_argument("--latency-ms", type=float, default=0.0)
     parser.add_argument("--wall-ms", type=float, default=0.0)
     args = parser.parse_args()
@@ -372,6 +405,12 @@ def main() -> int:
         model=args.model,
         latency_ms=args.latency_ms,
         wall_ms=args.wall_ms,
+        codex_configured=(
+            None if args.codex_configured is None else args.codex_configured == "true"
+        ),
+        open_reviewer_attempted=args.open_reviewer_attempted == "true",
+        open_reviewer_outcome=args.open_reviewer_outcome,
+        open_reviewer_model=args.open_reviewer_model,
     )
     print(
         json.dumps(
@@ -384,7 +423,7 @@ def main() -> int:
             sort_keys=True,
         )
     )
-    if receipt["state"] == "CODEX_FAILED":
+    if receipt["state"] not in {"REVIEW_PROPOSED", "NO_ACTION_RECOMMENDED"}:
         return 2
     return 0
 

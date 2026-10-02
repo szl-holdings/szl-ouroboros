@@ -222,26 +222,28 @@ def test_post_generation_admission_accepts_exact_no_action_review() -> None:
             "authority": NONE_AUTHORITY,
         }
     )
-    review, admitted, admission = admit_or_block_model_output(
+    review, admitted, admission, failure_code = admit_or_block_model_output(
         raw,
         candidate_digest=digest,
         selected_candidate_ids=[candidate_id],
     )
     assert admitted is True
     assert admission == "MODEL_OUTPUT_ADMITTED"
+    assert failure_code is None
     assert review["state"] == "NO_ACTION_RECOMMENDED"
 
 
 def test_post_generation_admission_rejects_invalid_model_json_as_blocked() -> None:
     digest = "d" * 64
     candidate_id = "frontier:" + "a" * 32
-    review, admitted, admission = admit_or_block_model_output(
+    review, admitted, admission, failure_code = admit_or_block_model_output(
         "not-json and never echoed",
         candidate_digest=digest,
         selected_candidate_ids=[candidate_id],
     )
     assert admitted is False
     assert admission == "MODEL_OUTPUT_REJECTED_FAIL_CLOSED"
+    assert failure_code == "OUTPUT_NOT_SINGLE_JSON_OBJECT"
     assert review == {
         "schema": "szl.codex.frontier-review/v1",
         "state": "BLOCKED",
@@ -282,13 +284,14 @@ def test_post_generation_admission_rejects_unlisted_evidence_as_blocked() -> Non
             "authority": NONE_AUTHORITY,
         }
     )
-    review, admitted, admission = admit_or_block_model_output(
+    review, admitted, admission, failure_code = admit_or_block_model_output(
         raw,
         candidate_digest=digest,
         selected_candidate_ids=[allowed],
     )
     assert admitted is False
     assert admission == "MODEL_OUTPUT_REJECTED_FAIL_CLOSED"
+    assert failure_code == "EVIDENCE_BINDING"
     assert review["state"] == "BLOCKED"
     assert review["recommendations"] == []
 
@@ -353,6 +356,7 @@ def test_execution_receipt_records_no_action_authority(tmp_path: Path) -> None:
     )
     assert receipt["state"] == "OPEN_WEIGHT_REVIEW_OUTPUT_ADMITTED"
     assert receipt["admission"]["model_output_admitted"] is True
+    assert receipt["admission"]["failure_code"] is None
     assert receipt["authority"] == NONE_AUTHORITY
     assert receipt["claims"]["independent_validation_required"] is True
     assert receipt["claims"]["native_schema_grammar_used"] is False
@@ -366,7 +370,7 @@ def test_rejected_execution_receipt_is_explicitly_blocked(tmp_path: Path) -> Non
         "source_revision": "2" * 40,
         "candidate_set_sha256": "d" * 64,
     }
-    review, admitted, admission = admit_or_block_model_output(
+    review, admitted, admission, failure_code = admit_or_block_model_output(
         "malformed",
         candidate_digest="d" * 64,
         selected_candidate_ids=[candidate_id],
@@ -385,7 +389,9 @@ def test_rejected_execution_receipt_is_explicitly_blocked(tmp_path: Path) -> Non
         },
         model_output_admitted=admitted,
         admission_state=admission,
+        failure_code=failure_code,
     )
     assert receipt["state"] == "OPEN_WEIGHT_REVIEW_BLOCKED_FAIL_CLOSED"
     assert receipt["admission"]["model_output_admitted"] is False
+    assert receipt["admission"]["failure_code"] == "OUTPUT_NOT_SINGLE_JSON_OBJECT"
     assert receipt["authority"] == NONE_AUTHORITY
