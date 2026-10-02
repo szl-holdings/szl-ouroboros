@@ -25,7 +25,7 @@ STATE_PATH = "data/frontier-state.v1.json"
 CANDIDATES_PATH = "data/frontier-candidates.public.jsonl"
 STATE_SCHEMA = "szl.second-brain.frontier-state/v1"
 CANDIDATE_SCHEMA = "szl.second-brain.frontier-candidate/v1"
-EXPECTED_PUBLIC_SOURCE_COUNT = 7  # live Second Brain packet: 6 original + ouroboros_runtime
+EXPECTED_PUBLIC_SOURCE_COUNT = 8  # reviewed public packet includes science_forum_pilot
 EXPECTED_PUBLIC_SOURCES = {
     "a11oy_public_estate": (
         "szl-holdings/a11oy", "governance/public-estate.v1.json", "public_estate"
@@ -40,6 +40,11 @@ EXPECTED_PUBLIC_SOURCES = {
     "living_anatomy": ("szl-holdings/anatomy", "README.md", "markdown"),
     "nemo_witness": ("szl-holdings/szl-nemo", "README.md", "markdown"),
     "ouroboros_runtime": ("szl-holdings/szl-ouroboros", "README.md", "markdown"),
+    "science_forum_pilot": (
+        "szl-holdings/szl-science-forum-corpus",
+        "dataset/sources.public.jsonl",
+        "forum_pilot",
+    ),
 }
 USER_AGENT = "szl-ouroboros-codex-frontier-review/1.0"
 MAX_STATE_BYTES = 512 * 1024
