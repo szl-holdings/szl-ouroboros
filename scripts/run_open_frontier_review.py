@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Run one evidence-bound frontier review with an open-weight model.
 
-The model generates unconstrained text because compiling the full frontier JSON
-Schema into a llama.cpp grammar is both unnecessary and unsafe for this schema's
-bounded strings and candidate enum. The generated text is always untrusted. A
-separate deterministic validator admits it or replaces it with an explicit
-BLOCKED receipt that carries no recommendation or action authority.
+The local model uses llama.cpp's generic JSON-object grammar for syntax only.
+The full frontier JSON Schema is not compiled into a model grammar because its
+bounded strings and candidate enum require independent validation. Generated
+JSON is always untrusted. A separate deterministic validator admits it or
+replaces it with an explicit BLOCKED receipt with no action authority.
 
 The default provider is the public exact-revision SZL Khipu GGUF through a
 verified llama-cpp-python CPU wheel. An explicitly configured OpenAI-compatible
@@ -393,6 +393,7 @@ def admit_or_block_model_output(
     *,
     candidate_digest: str,
     selected_candidate_ids: list[str],
+    finish_reason: str | None = "stop",
 ) -> tuple[dict[str, Any], bool, str, str | None]:
     """Admit exact compliant model JSON or close fail-closed as BLOCKED.
 
@@ -400,6 +401,12 @@ def admit_or_block_model_output(
     emitted bytes. Parse, field, evidence, text, and authority failures all
     converge to one deterministic BLOCKED object without echoing model output.
     """
+    if finish_reason != "stop":
+        return (
+            blocked_review(candidate_digest), False,
+            "MODEL_OUTPUT_REJECTED_FAIL_CLOSED",
+            "OUTPUT_TRUNCATED" if finish_reason == "length" else "COMPLETION_NOT_STOPPED",
+        )
     try:
         parsed = parse_single_json_object(raw_output)
     except OpenReviewerError as exc:
@@ -469,7 +476,7 @@ def run_local_gguf(
     context_tokens: int,
     seed: int,
 ) -> tuple[str, dict[str, Any]]:
-    """Generate once without native schema grammar; Python validates afterward."""
+    """Generate once with JSON syntax only; Python validates the full contract."""
     del runtime_schema  # prompt data only; never compile the complex schema natively
     try:
         from llama_cpp import Llama
@@ -493,6 +500,7 @@ def run_local_gguf(
         )
         response = model.create_chat_completion(
             messages=messages,
+            response_format={"type": "json_object"},
             temperature=0.0,
             top_p=1.0,
             top_k=1,
@@ -505,9 +513,12 @@ def run_local_gguf(
         raise OpenReviewerError(f"local Khipu inference failed: {type(exc).__name__}") from exc
 
     try:
-        content = str(response["choices"][0]["message"]["content"])
+        choice = response["choices"][0]
+        content = choice["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
         raise OpenReviewerError("local Khipu response shape is invalid") from exc
+    if not isinstance(content, str):
+        raise OpenReviewerError("local Khipu response shape is invalid")
     usage = response.get("usage") if isinstance(response, dict) else None
     metadata: dict[str, Any] = {
         "provider": "llama-cpp-python",
@@ -519,7 +530,9 @@ def run_local_gguf(
         "model_size": MODEL_SIZE,
         "key_required": False,
         "native_schema_grammar": False,
+        "json_object_grammar": True,
         "independent_post_generation_validation": True,
+        "finish_reason": choice.get("finish_reason"),
         "threads": threads,
         "context_tokens": context_tokens,
         "max_tokens": max_tokens,
@@ -605,9 +618,12 @@ def run_openai_compatible(
         ) from exc
     try:
         decoded = json.loads(body)
-        content = str(decoded["choices"][0]["message"]["content"])
+        choice = decoded["choices"][0]
+        content = choice["message"]["content"]
     except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
         raise OpenReviewerError("open-model endpoint response shape is invalid") from exc
+    if not isinstance(content, str):
+        raise OpenReviewerError("open-model endpoint response shape is invalid")
     parsed = urllib.parse.urlsplit(url)
     metadata = {
         "provider": "openai-compatible",
@@ -616,7 +632,9 @@ def run_openai_compatible(
         "key_supplied": bool(api_key),
         "key_value_recorded": False,
         "native_schema_grammar": False,
+        "json_object_grammar": False,
         "independent_post_generation_validation": True,
+        "finish_reason": choice.get("finish_reason"),
         "max_tokens": max_tokens,
         "seed": seed,
         "temperature": 0.0,
@@ -753,6 +771,7 @@ def main() -> int:
         raw_output,
         candidate_digest=str(source["candidate_set_sha256"]),
         selected_candidate_ids=selected_ids,
+        finish_reason=provider_metadata.get("finish_reason"),
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
