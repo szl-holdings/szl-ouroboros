@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -26,6 +28,8 @@ from scripts.run_open_frontier_review import (
     candidate_projection,
     normalize_chat_url,
     parse_single_json_object,
+    run_local_gguf,
+    run_openai_compatible,
     select_candidates,
     verify_model_file,
     write_execution_receipt,
@@ -233,6 +237,39 @@ def test_post_generation_admission_accepts_exact_no_action_review() -> None:
     assert review["state"] == "NO_ACTION_RECOMMENDED"
 
 
+@pytest.mark.parametrize(
+    ("finish_reason", "expected_code"),
+    [("length", "OUTPUT_TRUNCATED"), (None, "COMPLETION_NOT_STOPPED")],
+)
+def test_post_generation_admission_rejects_incomplete_completion(
+    finish_reason: str | None,
+    expected_code: str,
+) -> None:
+    digest = "d" * 64
+    candidate_id = "frontier:" + "a" * 32
+    valid_json = json.dumps(
+        {
+            "schema": "szl.codex.frontier-review/v1",
+            "state": "NO_ACTION_RECOMMENDED",
+            "candidate_set_sha256": digest,
+            "summary": "No bounded change is justified.",
+            "recommendations": [],
+            "authority": NONE_AUTHORITY,
+        }
+    )
+    review, admitted, admission, failure_code = admit_or_block_model_output(
+        valid_json,
+        candidate_digest=digest,
+        selected_candidate_ids=[candidate_id],
+        finish_reason=finish_reason,
+    )
+    assert admitted is False
+    assert admission == "MODEL_OUTPUT_REJECTED_FAIL_CLOSED"
+    assert failure_code == expected_code
+    assert review["state"] == "BLOCKED"
+    assert review["recommendations"] == []
+
+
 def test_post_generation_admission_rejects_invalid_model_json_as_blocked() -> None:
     digest = "d" * 64
     candidate_id = "frontier:" + "a" * 32
@@ -323,6 +360,90 @@ def test_openai_compatible_url_supports_ollama_vllm_and_rejects_credentials() ->
     )
     with pytest.raises(OpenReviewerError, match="invalid"):
         normalize_chat_url("http://user:password@127.0.0.1:8000")
+
+
+def test_local_gguf_uses_json_syntax_grammar_without_schema_shortcut(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeLlama:
+        def __init__(self, **kwargs: object) -> None:
+            calls["init"] = kwargs
+
+        def create_chat_completion(self, **kwargs: object) -> dict[str, object]:
+            calls["completion"] = kwargs
+            return {
+                "choices": [
+                    {
+                        "message": {"content": '{"state":"NO_ACTION_RECOMMENDED"}'},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 8},
+            }
+
+    fake_module = ModuleType("llama_cpp")
+    fake_module.Llama = FakeLlama
+    monkeypatch.setitem(sys.modules, "llama_cpp", fake_module)
+    content, metadata = run_local_gguf(
+        messages=[{"role": "user", "content": "Return JSON."}],
+        runtime_schema=review_schema(),
+        model_path=Path("pinned.gguf"),
+        max_tokens=1800,
+        context_tokens=16384,
+        seed=749,
+    )
+    assert content == '{"state":"NO_ACTION_RECOMMENDED"}'
+    assert calls["completion"]["response_format"] == {"type": "json_object"}
+    assert metadata["json_object_grammar"] is True
+    assert metadata["native_schema_grammar"] is False
+    assert metadata["finish_reason"] == "stop"
+
+
+def test_endpoint_records_finish_reason_for_independent_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {"content": '{"state":"NO_ACTION_RECOMMENDED"}'},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+            ).encode()
+
+    def fake_urlopen(_request: object, timeout: int) -> FakeResponse:
+        assert timeout == 180
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        "scripts.run_open_frontier_review.urllib.request.urlopen", fake_urlopen
+    )
+    content, metadata = run_openai_compatible(
+        base_url="http://127.0.0.1:8000",
+        model_name="local-model",
+        messages=[{"role": "user", "content": "Return JSON."}],
+        runtime_schema=review_schema(),
+        max_tokens=1800,
+        seed=749,
+        api_key=None,
+    )
+    assert content == '{"state":"NO_ACTION_RECOMMENDED"}'
+    assert metadata["finish_reason"] == "stop"
+    assert metadata["json_object_grammar"] is False
 
 
 def test_execution_receipt_records_no_action_authority(tmp_path: Path) -> None:
