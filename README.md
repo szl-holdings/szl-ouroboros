@@ -88,8 +88,40 @@ validator. Model-generated JSON is always treated as untrusted.
 
 A reviewer can propose at most twelve evidence-linked recommendations across the
 approved Brain, Anatomy, A11oy, Formula, Forge, Nemo, and Ouroboros repositories.
-The keyless prompt narrows this to at most five recommendations from a
-deterministically selected, source-diverse candidate projection. Neither provider
+The keyless lane narrows this to **one compact recommendation over six selected
+candidate excerpts**, or an explicit no-action review. Selection prefers distinct
+sources by deterministic relevance score, and respects the exact requested
+candidate limit even when more sources are available. The execution receipt
+records the total source candidate count and explicitly limits the review scope
+to selected public excerpts. It does not claim a full-portfolio review.
+
+The prompt and an additional independent output validator enforce the same
+compact contract:
+
+| Output field | Maximum |
+|---|---:|
+| Recommendations | 1 |
+| Summary | 120 characters |
+| Title | 80 characters |
+| Rationale | 240 characters |
+| Risk | 120 characters |
+| Evidence candidate IDs | 2 |
+| Validation steps | 2, each 120 characters |
+| Canonical complete review | 1,800 UTF-8 bytes |
+
+This addresses the concrete
+[2026-10-04 truncated run](https://github.com/szl-holdings/szl-ouroboros/actions/runs/37213923647),
+which selected 24 candidates and reached all 1,800 completion tokens with
+`finish_reason=length`. The workflow keeps its 1,800-token allowance, exact
+model/runtime pins, temperature, seed and one-attempt bound. The byte limit is a
+separate admission constraint, not a token-count guarantee. Any non-stop
+completion still fails closed as `OUTPUT_TRUNCATED` or
+`COMPLETION_NOT_STOPPED`; an otherwise valid general-schema review that exceeds
+the compact contract fails as `OUTPUT_BUDGET_CONTRACT`. No partial output is
+repaired or admitted. Actual replay receipts, not these source limits, establish
+whether a particular model attempt completed.
+
+Neither provider
 can edit files, use repository credentials, train weights, promote candidates,
 execute tools, merge pull requests, mutate providers, reveal secrets, or load the
 private Second Brain graph. The output is an advisory artifact, not accepted

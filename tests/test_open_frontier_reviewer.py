@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import sys
 from pathlib import Path
@@ -60,37 +61,8 @@ def row(
 
 
 def review_schema() -> dict[str, object]:
-    return {
-        "type": "object",
-        "properties": {
-            "schema": {"const": "szl.codex.frontier-review/v1"},
-            "state": {
-                "enum": ["REVIEW_PROPOSED", "NO_ACTION_RECOMMENDED", "BLOCKED"]
-            },
-            "candidate_set_sha256": {
-                "type": "string",
-                "pattern": "^[0-9a-f]{64}$",
-            },
-            "summary": {"type": "string"},
-            "recommendations": {
-                "type": "array",
-                "maxItems": 12,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "evidence_candidate_ids": {
-                            "type": "array",
-                            "items": {
-                                "type": "string",
-                                "pattern": "^frontier:[0-9a-f]{32}$",
-                            },
-                        }
-                    },
-                },
-            },
-            "authority": {"type": "object"},
-        },
-    }
+    path = Path(__file__).resolve().parents[1] / "schemas/codex-frontier-review.schema.json"
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def test_open_model_pin_matches_owned_a11oy_cortex_contract() -> None:
@@ -140,6 +112,7 @@ def test_selection_is_deterministic_and_preserves_repository_diversity() -> None
     first = select_candidates(candidates, limit=3)
     second = select_candidates(candidates, limit=3)
     assert [item["id"] for item in first] == [item["id"] for item in second]
+    assert len(first) == 3
     assert {item["source_repository"] for item in first} == {
         "szl-holdings/anatomy",
         "szl-holdings/a11oy",
@@ -171,9 +144,76 @@ def test_runtime_schema_binds_digest_and_exact_candidate_ids() -> None:
     )
     assert runtime["properties"]["candidate_set_sha256"] == {"const": digest}
     recommendations = runtime["properties"]["recommendations"]
-    assert recommendations["maxItems"] == 5
+    assert recommendations["maxItems"] == 1
     evidence = recommendations["items"]["properties"]["evidence_candidate_ids"]
     assert evidence["items"]["enum"] == candidate_ids
+
+
+def test_selection_never_exceeds_a_budget_smaller_than_the_source_count() -> None:
+    candidates = [row(f"frontier:{index:032x}", f"szl-holdings/repo-{index}") for index in range(10)]
+    for limit in (1, 6, 10):
+        assert len(select_candidates(candidates, limit=limit)) == limit
+    with pytest.raises(OpenReviewerError):
+        select_candidates(candidates, limit=True)
+
+
+def proposed_review() -> dict:
+    return {
+        "schema": "szl.codex.frontier-review/v1",
+        "state": "REVIEW_PROPOSED",
+        "candidate_set_sha256": "d" * 64,
+        "summary": "Review one source-bound integration test.",
+        "recommendations": [{
+            "id": "R01", "priority": "P2", "target_repository": "szl-holdings/a11oy",
+            "title": "Test the public evidence binding",
+            "rationale": "The selected receipt identifies a checkable interface contract.",
+            "evidence_candidate_ids": ["frontier:" + "a" * 32],
+            "recommended_change_type": "TEST",
+            "validation": ["Verify the exact source digest and expected rejection."],
+            "risk": "A local test does not prove a live deployment.",
+        }],
+        "authority": dict(NONE_AUTHORITY),
+    }
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda value: value.update(summary="x" * 121),
+    lambda value: value["recommendations"].append({**value["recommendations"][0], "id": "R02"}),
+    lambda value: value["recommendations"][0].update(title="x" * 81),
+    lambda value: value["recommendations"][0].update(rationale="x" * 241),
+    lambda value: value["recommendations"][0].update(risk="x" * 121),
+    lambda value: value["recommendations"][0].update(validation=["one", "two", "three"]),
+    lambda value: value["recommendations"][0].update(validation=["x" * 121]),
+    lambda value: value["recommendations"][0].update(evidence_candidate_ids=["frontier:" + char * 32 for char in "abc"]),
+])
+def test_global_schema_compliance_cannot_bypass_the_compact_output_budget(mutation) -> None:
+    value = copy.deepcopy(proposed_review())
+    mutation(value)
+    review, admitted, _, failure = admit_or_block_model_output(
+        json.dumps(value), candidate_digest="d" * 64,
+        selected_candidate_ids=["frontier:" + char * 32 for char in "abc"],
+    )
+    assert admitted is False
+    assert failure == "OUTPUT_BUDGET_CONTRACT"
+    assert review["recommendations"] == []
+
+
+def test_compact_review_counts_utf8_bytes_and_preserves_a_valid_small_review() -> None:
+    value = proposed_review()
+    assert admit_or_block_model_output(
+        json.dumps(value), candidate_digest="d" * 64,
+        selected_candidate_ids=["frontier:" + "a" * 32],
+    )[1] is True
+    value["summary"] = "\U0001f9ea" * 120
+    value["recommendations"][0].update(title="\U0001f9ea" * 80, rationale="\U0001f9ea" * 240,
+                                           risk="\U0001f9ea" * 120, validation=["\U0001f9ea" * 120] * 2)
+    review, admitted, _, failure = admit_or_block_model_output(
+        json.dumps(value), candidate_digest="d" * 64,
+        selected_candidate_ids=["frontier:" + "a" * 32],
+    )
+    assert admitted is False
+    assert failure == "OUTPUT_BUDGET_CONTRACT"
+    assert review["recommendations"] == []
 
 
 def test_projection_bounds_untrusted_candidate_content() -> None:

@@ -230,7 +230,7 @@ jobs:
             --output "$REVIEW_OUTPUT" \
             --execution-receipt "$OPEN_EXECUTION_RECEIPT" \
             --provider local-gguf \
-            --candidate-limit 24 \
+            --candidate-limit 6 \
             --context-tokens 16384 \
             --max-tokens 1800 \
             --seed 749
