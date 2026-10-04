@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
+import time
+import urllib.parse
 
 import pytest
 
 from scripts.finalize_codex_frontier_review import ReviewError, finalize
-from scripts.prepare_codex_frontier_review import PacketError, validate_packet
+from scripts.prepare_codex_frontier_review import PacketError, build_input, validate_packet
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -47,6 +52,8 @@ def source_identities() -> list[dict[str, str]]:
         {"source_id": "nemo_witness", "repository": "szl-holdings/szl-nemo", "path": "README.md", "parser": "markdown"},
         {"source_id": "ouroboros_runtime", "repository": "szl-holdings/szl-ouroboros", "path": "README.md", "parser": "markdown"},
         {"source_id": "science_forum_pilot", "repository": "szl-holdings/szl-science-forum-corpus", "path": "dataset/sources.public.jsonl", "parser": "forum_pilot"},
+        {"source_id": "public_research_arxiv", "repository": "public-metadata/arxiv", "path": "data/public-research-metadata.v1.json", "parser": "public_research_metadata"},
+        {"source_id": "public_research_crossref", "repository": "public-metadata/crossref", "path": "data/public-research-metadata.v1.json", "parser": "public_research_metadata"},
     ]
 
 
@@ -59,7 +66,7 @@ def packet_bytes() -> tuple[bytes, bytes, str]:
         "state": "REVIEW_REQUIRED",
         "candidate_count": 1,
         "candidate_set_sha256": digest,
-        "source_count": 8,
+        "source_count": 10,
         "sources": source_identities(),
         "public_content_access": "HANDLES_ONLY",
         "controller_content_access": "AUTHORIZED_CONTROLLER_ONLY",
@@ -120,15 +127,227 @@ def test_prepare_validates_exact_candidate_digest_and_authority() -> None:
     assert rows == [candidate()]
 
 
-def test_prepare_rejects_stale_seven_source_contract() -> None:
+def metadata_candidate(provider: str = "arxiv", *, long_fields: bool = False) -> dict[str, object]:
+    row = candidate()
+    metadata = {
+        "provider": provider,
+        "identifier": "2601.00001v1" if provider == "arxiv" else "10.1000/example",
+        "title": "Synthetic metadata fixture",
+        "full_text_licence": "NOT_INFERRED",
+        "authors": ["Fixture Author"], "categories": [], "licence_urls": [],
+        "published": "2026-01-01T00:00:00Z" if provider == "arxiv" else "2026-01-01",
+        "updated": "2026-01-01T00:00:00Z" if provider == "arxiv" else None,
+        "metadata_licence": "CC0-1.0" if provider == "arxiv" else "NOT_DECLARED_BY_RESPONSE",
+    }
+    metadata["canonical_url"] = ("https://arxiv.org/abs/" if provider == "arxiv" else "https://doi.org/") + metadata["identifier"]
+    if long_fields:
+        metadata["title"] = "T" * 240
+        metadata["authors"] = ["A" * 240] * 32
+    content = "\n".join((metadata["title"], "Authors: " + ", ".join(metadata["authors"]),
+                         "Identifier: " + metadata["identifier"], "Publication date: " + str(metadata["published"]),
+                         "Categories: " + ", ".join(metadata["categories"]),
+                         "Metadata licence: " + metadata["metadata_licence"],
+                         "Full text licence: NOT_INFERRED", "Source: " + metadata["canonical_url"]))
+    content = "\n".join(line.rstrip() for line in content.splitlines()).strip()[:1600]
+    capture = hashlib.sha256(canonical_bytes(metadata)).hexdigest()
+    row.update({
+        "title": metadata["title"][:180], "content": content,
+        "content_sha256": hashlib.sha256(content.encode()).hexdigest(),
+        "source_repository": f"public-metadata/{provider}",
+        "source_path": metadata["identifier"],
+        "source_kind": "research-metadata",
+        "source_revision_kind": "metadata-capture-sha256",
+        "source_revision": capture,
+        "admission": "DISCOVERED_REVIEW_REQUIRED",
+        "provenance": {
+            "provider": provider,
+            "identifier": metadata["identifier"],
+            "metadata": metadata,
+            "capture_sha256": capture,
+            "response_sha256": "b" * 64, "response_bytes": 1024,
+            "observed_at": "2026-01-01T01:00:00Z",
+            "request_url": ("https://export.arxiv.org/api/query?" + urllib.parse.urlencode({"id_list": metadata["identifier"], "max_results": 1})
+                            if provider == "arxiv" else "https://api.crossref.org/works/" + urllib.parse.quote(metadata["identifier"], safe="")),
+            "source_authentication": "PUBLIC_HTTPS_METADATA_NOT_INDEPENDENT_ATTESTATION",
+        },
+    })
+    return row
+
+
+def repack(row: dict[str, object]) -> tuple[bytes, bytes]:
+    state_raw, _, _ = packet_bytes()
+    state = json.loads(state_raw)
+    candidates_raw = canonical_bytes(row) + b"\n"
+    state["candidate_set_sha256"] = hashlib.sha256(candidates_raw).hexdigest()
+    return canonical_bytes(state), candidates_raw
+
+
+@pytest.mark.parametrize("provider", ["arxiv", "crossref"])
+def test_prepare_admits_bound_metadata_without_relabelling_as_git(provider: str) -> None:
+    row = metadata_candidate(provider)
+    state_raw, candidates_raw = repack(row)
+    _, rows = validate_packet(state_raw, candidates_raw)
+    assert rows == [row]
+    payload, _ = build_input("a" * 40, state_raw, candidates_raw)
+    projected = payload["candidates"][0]
+    assert projected["source_revision_kind"] == "metadata-capture-sha256"
+    assert projected["source_authentication"] == "PUBLIC_HTTPS_METADATA_NOT_INDEPENDENT_ATTESTATION"
+    assert payload["authority"]["training"] == "NONE"
+
+
+@pytest.mark.parametrize("tamper", [
+    "digest", "untyped", "kind", "repository", "provider", "identifier",
+    "capture", "metadata", "authentication", "full_text_licence", "admission",
+    "content", "title", "response", "request", "timestamp", "unhashable_provider", "unhashable_request",
+])
+def test_prepare_rejects_metadata_type_or_provenance_drift(tamper: str) -> None:
+    row = metadata_candidate()
+    if tamper == "digest":
+        row["source_revision"] = "1" * 40
+    elif tamper == "untyped":
+        row.pop("source_revision_kind")
+    elif tamper == "kind":
+        row["source_kind"] = "public-source"
+    elif tamper == "repository":
+        row["source_repository"] = "public-metadata/other"
+    elif tamper in {"provider", "identifier"}:
+        row["provenance"][tamper] = "other"
+    elif tamper == "capture":
+        row["provenance"]["capture_sha256"] = "0" * 64
+    elif tamper == "metadata":
+        row["provenance"]["metadata"]["title"] = "changed"
+    elif tamper == "authentication":
+        row["provenance"]["source_authentication"] = "VERIFIED_TRUTH"
+    elif tamper == "full_text_licence":
+        row["provenance"]["metadata"]["full_text_licence"] = "INFERRED"
+    elif tamper == "content":
+        row["content"] = "This is a full paper, not the retained metadata."
+        row["content_sha256"] = hashlib.sha256(row["content"].encode()).hexdigest()
+    elif tamper == "title":
+        row["title"] = "Unbound title"
+    elif tamper == "response":
+        row["provenance"]["response_bytes"] = 256 * 1024 + 1
+    elif tamper == "request":
+        row["provenance"]["request_url"] = "https://example.invalid/"
+    elif tamper == "timestamp":
+        row["provenance"]["observed_at"] = "unknown"
+    elif tamper == "unhashable_provider":
+        row["provenance"]["metadata"]["provider"] = []
+    elif tamper == "unhashable_request":
+        row["provenance"]["request_url"] = []
+    else:
+        row["admission"] = "ACCEPTED"
+    with pytest.raises(PacketError, match="source binding"):
+        validate_packet(*repack(row))
+
+
+@pytest.mark.parametrize("revision_kind", ["git-sha1", "metadata-capture-sha256", "unknown"])
+def test_prepare_does_not_admit_sha256_as_git_revision(revision_kind: str) -> None:
+    row = candidate()
+    row["source_revision"] = "1" * 64
+    row["source_revision_kind"] = revision_kind
+    with pytest.raises(PacketError, match="source binding"):
+        validate_packet(*repack(row))
+
+
+def test_prepare_retains_producer_title_and_content_bounds() -> None:
+    row = metadata_candidate(long_fields=True)
+    assert len(row["title"]) == 180
+    assert len(row["content"]) == 1600
+    assert validate_packet(*repack(row))[1] == [row]
+
+
+@pytest.mark.parametrize("preparation_outcome", ["failure", "cancelled", "skipped"])
+def test_prepare_failure_closes_without_source_or_reviewer(tmp_path: Path, preparation_outcome: str) -> None:
+    output = tmp_path / "loop-receipt.json"
+    receipt = finalize(
+        source_receipt_path=tmp_path / "missing-source.json",
+        candidate_path=tmp_path / "missing-candidates.jsonl",
+        review_path=tmp_path / "missing-review.json",
+        output_path=output,
+        codex_attempted=False, codex_outcome="skipped", model="",
+        latency_ms=0, wall_ms=1500,
+        preparation_outcome=preparation_outcome,
+    )
+    assert receipt["state"] == "SOURCE_PREPARATION_FAILED"
+    assert receipt["source"] is None
+    assert receipt["preparation"] == {"outcome": preparation_outcome, "validated": False}
+    assert receipt["codex"]["attempted"] is False
+    assert receipt["open_reviewer"]["attempted"] is False
+    assert receipt["ouroboros"]["exit"] == "aborted"
+    assert receipt["ouroboros"]["modelMs"] == 0
+    assert receipt["ouroboros"]["receiptsInEqOut"] is True
+    assert receipt["authority"]["execution"] == "NONE"
+    saved = json.loads(output.read_text())
+    digest = saved.pop("receipt_sha256")
+    assert digest == hashlib.sha256(canonical_bytes(saved)).hexdigest()
+
+
+def test_failed_prepare_cannot_hide_model_attempt(tmp_path: Path) -> None:
+    with pytest.raises(ReviewError, match="preparation"):
+        finalize(
+            source_receipt_path=tmp_path / "missing-source.json",
+            candidate_path=tmp_path / "missing-candidates.jsonl",
+            review_path=tmp_path / "missing-review.json",
+            output_path=tmp_path / "receipt.json",
+            codex_attempted=True, codex_outcome="success", model="",
+            latency_ms=50, wall_ms=100, preparation_outcome="failure",
+        )
+
+
+def test_workflow_finalizer_retains_prepare_failure_without_reviewer_timer(tmp_path: Path) -> None:
+    # Execute the checked-in shell itself. Redirect only its two timer paths;
+    # no model, remote source, credential, or workflow dispatch is involved.
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/codex-continuous-frontier.yml").read_text()
+    finalizer = workflow.split("      - name: Close the loop with an exact receipt\n", 1)[1]
+    run = finalizer.split("        run: |\n", 1)[1].split("\n      - name:", 1)[0]
+    shell = "\n".join(line[10:] for line in run.splitlines())
+    wall_timer = tmp_path / "wall-start-ms"
+    wall_timer.write_text(str(int(time.time() * 1000) - 50))
+    shell = shell.replace("/tmp/ouroboros-wall-start-ms", str(wall_timer))
+    shell = shell.replace("/tmp/reviewer-start-ms", str(tmp_path / "missing-reviewer-start-ms"))
+    output = tmp_path / "receipt.json"
+    env = dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"])
+    env.update({
+        "SOURCE_RECEIPT": str(tmp_path / "missing-source.json"),
+        "CANDIDATES": str(tmp_path / "missing-candidates.jsonl"),
+        "REVIEW_OUTPUT": str(tmp_path / "missing-review.json"),
+        "LOOP_RECEIPT": str(output), "PREPARATION_OUTCOME": "failure",
+        "CODEX_CONFIGURED": "false", "CODEX_OUTCOME": "skipped",
+        "OPEN_REVIEWER_OUTCOME": "skipped", "OPEN_MODEL_LABEL": "not-run",
+    })
+    result = subprocess.run(["bash", "-c", shell], cwd=root, env=env, capture_output=True, text=True)
+    assert result.returncode == 2, result.stderr
+    assert json.loads(output.read_text())["state"] == "SOURCE_PREPARATION_FAILED"
+    summary = workflow.split("      - name: Publish the loop summary\n", 1)[1]
+    summary_run = summary.split("        run: |\n", 1)[1].split("\n      - name:", 1)[0]
+    summary_shell = "\n".join(line[10:] for line in summary_run.splitlines())
+    env["GITHUB_STEP_SUMMARY"] = str(tmp_path / "summary.md")
+    env["OPEN_EXECUTION_RECEIPT"] = str(tmp_path / "missing-execution.json")
+    summary_result = subprocess.run(["bash", "-c", summary_shell], cwd=root, env=env, capture_output=True, text=True)
+    assert summary_result.returncode == 0, summary_result.stderr
+    summary_text = Path(env["GITHUB_STEP_SUMMARY"]).read_text()
+    assert "Source revision: `UNAVAILABLE`" in summary_text
+    assert "Reviewer: `NOT_ATTEMPTED`" in summary_text
+    enforce = workflow.split("      - name: Enforce honest terminal state\n", 1)[1]
+    enforce_run = enforce.split("        run: |\n", 1)[1]
+    enforce_shell = "\n".join(line[10:] for line in enforce_run.splitlines())
+    env["FINALIZE_OUTCOME"] = "failure"
+    enforced = subprocess.run(["bash", "-c", enforce_shell], cwd=root, env=env, capture_output=True, text=True)
+    assert enforced.returncode != 0
+
+
+@pytest.mark.parametrize("stale_count", [7, 8, 9, 11])
+def test_prepare_rejects_stale_source_contract(stale_count: int) -> None:
     state_raw, candidates_raw, _digest = packet_bytes()
     state = json.loads(state_raw)
-    state["source_count"] = 7
+    state["source_count"] = stale_count
     with pytest.raises(PacketError, match="source count drifted"):
         validate_packet(json.dumps(state).encode(), candidates_raw)
 
 
-def test_prepare_requires_the_exact_eight_source_identities() -> None:
+def test_prepare_requires_the_exact_ten_source_identities() -> None:
     state_raw, candidates_raw, _digest = packet_bytes()
     state = json.loads(state_raw)
     state["sources"][0]["repository"] = "szl-holdings/other"

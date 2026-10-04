@@ -252,18 +252,28 @@ def finalize(
     open_reviewer_attempted: bool = False,
     open_reviewer_outcome: str = "not_attempted",
     open_reviewer_model: str = "",
+    preparation_outcome: str = "success",
 ) -> dict[str, Any]:
-    source = read_json(source_receipt_path)
-    if source.get("schema") != SOURCE_SCHEMA:
-        raise ReviewError("source receipt schema mismatch")
-    if source.get("authority") != NONE_AUTHORITY:
-        raise ReviewError("source receipt authority drifted")
-    candidate_digest = str(source.get("candidate_set_sha256") or "")
-    if not HEX_64.fullmatch(candidate_digest):
-        raise ReviewError("source candidate digest is malformed")
-    candidate_ids = load_candidate_ids(candidate_path)
-    if int(source.get("candidate_count") or -1) != len(candidate_ids):
-        raise ReviewError("source receipt candidate count mismatch")
+    if preparation_outcome not in {"success", "failure", "cancelled", "skipped"}:
+        raise ReviewError("source preparation outcome is invalid")
+    prepared = preparation_outcome == "success"
+    if not prepared and (codex_attempted or open_reviewer_attempted or latency_ms != 0):
+        raise ReviewError("reviewer attempt without successful source preparation")
+    source = None
+    candidate_digest = ""
+    candidate_ids: set[str] = set()
+    if prepared:
+        source = read_json(source_receipt_path)
+        if source.get("schema") != SOURCE_SCHEMA:
+            raise ReviewError("source receipt schema mismatch")
+        if source.get("authority") != NONE_AUTHORITY:
+            raise ReviewError("source receipt authority drifted")
+        candidate_digest = str(source.get("candidate_set_sha256") or "")
+        if not HEX_64.fullmatch(candidate_digest):
+            raise ReviewError("source candidate digest is malformed")
+        candidate_ids = load_candidate_ids(candidate_path)
+        if int(source.get("candidate_count") or -1) != len(candidate_ids):
+            raise ReviewError("source receipt candidate count mismatch")
 
     configured = codex_attempted if codex_configured is None else codex_configured
     if codex_attempted and not configured:
@@ -284,7 +294,10 @@ def finalize(
     provider = "openai" if configured else "local-gguf"
 
     if not attempted:
-        state = "CODEX_FAILED" if configured else "CODEX_UNAVAILABLE_MISSING_SECRET"
+        state = (
+            "SOURCE_PREPARATION_FAILED" if not prepared else
+            "CODEX_FAILED" if configured else "CODEX_UNAVAILABLE_MISSING_SECRET"
+        )
         review: dict[str, Any] | None = None
         review_sha = None
         attempts: list[dict[str, Any]] = []
@@ -344,6 +357,7 @@ def finalize(
         "schema": RECEIPT_SCHEMA,
         "state": state,
         "source": source,
+        "preparation": {"outcome": preparation_outcome, "validated": prepared},
         "codex": {
             "configured": configured,
             "attempted": codex_attempted,
@@ -385,6 +399,10 @@ def main() -> int:
     parser.add_argument("--candidates", type=Path, required=True)
     parser.add_argument("--review", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--preparation-outcome", default="success",
+        choices=("success", "failure", "cancelled", "skipped"),
+    )
     parser.add_argument("--codex-attempted", choices=("true", "false"), required=True)
     parser.add_argument("--codex-configured", choices=("true", "false"))
     parser.add_argument("--codex-outcome", default="not_attempted")
@@ -400,6 +418,7 @@ def main() -> int:
         candidate_path=args.candidates,
         review_path=args.review,
         output_path=args.output,
+        preparation_outcome=args.preparation_outcome,
         codex_attempted=args.codex_attempted == "true",
         codex_outcome=args.codex_outcome,
         model=args.model,
