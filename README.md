@@ -23,6 +23,19 @@ Card: [`SZLHOLDINGS/szl-ouroboros`](https://huggingface.co/SZLHOLDINGS/szl-ourob
 
 `Ouroboros continuous frontier review` runs every two hours. It binds one
 read-only model review to the exact current Second Brain frontier candidate set.
+The reviewed packet has ten fixed source identities: the eight repository
+sources and public arXiv/Crossref metadata captures. Git revisions remain
+40-character SHA-1 object identifiers. Metadata captures carry the explicit
+`metadata-capture-sha256` kind and must bind their provider, identifier, canonical
+URL, retained metadata digest, bounded response receipt, title, and exact content
+projection. They provide metadata for review only; they do not admit paper text
+or infer full-text rights, training authority, or independently verified truth.
+
+If input preparation fails, the loop retains a `SOURCE_PREPARATION_FAILED`
+receipt with an unavailable source and no reviewer attempt. It does not require
+a reviewer timer that was never started. The final enforcement step remains red;
+receipt closure records the failure and never substitutes for a valid review.
+
 The provider chain is explicit:
 
 1. use the existing pinned Codex action when `OPENAI_API_KEY` or
@@ -169,4 +182,3 @@ import szl_ouroboros as local_kernel
 This selects local Python source rather than calling the Hub loader. Importing local
 source also executes Python. This documentation check does not run that import,
 install dependencies, qualify a runtime or establish a Hub publication.
-

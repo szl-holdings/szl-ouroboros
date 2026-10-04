@@ -15,7 +15,9 @@ import os
 import re
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +27,7 @@ STATE_PATH = "data/frontier-state.v1.json"
 CANDIDATES_PATH = "data/frontier-candidates.public.jsonl"
 STATE_SCHEMA = "szl.second-brain.frontier-state/v1"
 CANDIDATE_SCHEMA = "szl.second-brain.frontier-candidate/v1"
-EXPECTED_PUBLIC_SOURCE_COUNT = 8  # reviewed public packet includes science_forum_pilot
+EXPECTED_PUBLIC_SOURCE_COUNT = 10  # eight source repositories plus two metadata providers
 EXPECTED_PUBLIC_SOURCES = {
     "a11oy_public_estate": (
         "szl-holdings/a11oy", "governance/public-estate.v1.json", "public_estate"
@@ -45,7 +47,20 @@ EXPECTED_PUBLIC_SOURCES = {
         "dataset/sources.public.jsonl",
         "forum_pilot",
     ),
+    "public_research_arxiv": (
+        "public-metadata/arxiv", "data/public-research-metadata.v1.json",
+        "public_research_metadata",
+    ),
+    "public_research_crossref": (
+        "public-metadata/crossref", "data/public-research-metadata.v1.json",
+        "public_research_metadata",
+    ),
 }
+METADATA_AUTHENTICATION = "PUBLIC_HTTPS_METADATA_NOT_INDEPENDENT_ATTESTATION"
+METADATA_REVISION_KIND = "metadata-capture-sha256"
+ARXIV_IDENTIFIER = re.compile(r"^\d{4}\.\d{4,5}v[1-9]\d{0,2}$")
+DOI_IDENTIFIER = re.compile(r"^10\.\d{4,9}/[a-z0-9._;()/:-]{1,180}$")
+UNSAFE_TITLE = re.compile(r"[\x00-\x1f\x7f]")
 USER_AGENT = "szl-ouroboros-codex-frontier-review/1.0"
 MAX_STATE_BYTES = 512 * 1024
 MAX_CANDIDATE_BYTES = 4 * 1024 * 1024
@@ -162,6 +177,130 @@ def reject_secret_like(text: str) -> None:
     reject_secret_like_material(text)
 
 
+def research_text(value: Any) -> bool:
+    """Accept only the producer's bounded, sanitized scalar projection."""
+    return (isinstance(value, str) and 0 < len(value) <= 240
+            and not UNSAFE_TITLE.search(value)
+            and " ".join(re.sub(r"<[^>]{0,512}>", " ", value).split()) == value)
+
+
+def research_timestamp(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).tzinfo is not None
+    except ValueError:
+        return False
+
+
+def validate_research_metadata(row: dict[str, Any]) -> None:
+    """Verify metadata captures as metadata, never as Git or admission receipts.
+
+    The source file is bound to an exact Second Brain Git revision. These nested
+    captures bind normalized public metadata, not independently attested API bytes;
+    no paper text, remote URL, or metadata-provided instruction is fetched or run.
+    """
+    provenance = row.get("provenance")
+    provenance_keys = {"provider", "identifier", "capture_sha256", "response_sha256",
+                       "response_bytes", "request_url", "observed_at",
+                       "source_authentication", "metadata"}
+    if not isinstance(provenance, dict) or set(provenance) != provenance_keys:
+        raise PacketError("research metadata provenance is invalid")
+    metadata = provenance["metadata"]
+    metadata_keys = {"provider", "identifier", "canonical_url", "title", "authors",
+                     "published", "updated", "categories", "licence_urls",
+                     "metadata_licence", "full_text_licence"}
+    if not isinstance(metadata, dict) or set(metadata) != metadata_keys:
+        raise PacketError("research metadata projection is invalid")
+    provider, identifier = metadata["provider"], metadata["identifier"]
+    if (not isinstance(provider, str) or provider not in {"arxiv", "crossref"} or not isinstance(identifier, str)
+            or not (ARXIV_IDENTIFIER if provider == "arxiv" else DOI_IDENTIFIER).fullmatch(identifier)
+            or provenance["provider"] != provider or provenance["identifier"] != identifier
+            or row.get("source_repository") != f"public-metadata/{provider}"
+            or row.get("source_path") != identifier
+            or row.get("source_kind") != "research-metadata"
+            or row.get("source_revision_kind") != METADATA_REVISION_KIND
+            or row.get("admission") != "DISCOVERED_REVIEW_REQUIRED"
+            or "quant_domain" in row):
+        raise PacketError("research metadata source binding is invalid")
+    prefix = "https://arxiv.org/abs/" if provider == "arxiv" else "https://doi.org/"
+    if (metadata["canonical_url"] != prefix + identifier
+            or not research_text(metadata["title"]) or row.get("title") != metadata["title"][:180]
+            or metadata["full_text_licence"] != "NOT_INFERRED"):
+        raise PacketError("research metadata title, URL, or rights binding is invalid")
+    for field, bound in (("authors", 32), ("categories", 12), ("licence_urls", 8)):
+        values = metadata[field]
+        if not isinstance(values, list) or len(values) > bound or not all(research_text(value) for value in values):
+            raise PacketError("research metadata scalar bound is invalid")
+    if provider == "arxiv":
+        requests = {"https://export.arxiv.org/api/query?" + urllib.parse.urlencode(
+            {"id_list": item, "max_results": 1}) for item in (identifier, identifier.split("v")[0])}
+        if (metadata["metadata_licence"] != "CC0-1.0"
+                or not research_timestamp(metadata["published"])
+                or not research_timestamp(metadata["updated"])):
+            raise PacketError("research arXiv date or licence binding is invalid")
+    else:
+        requests = {"https://api.crossref.org/works/" + urllib.parse.quote(identifier, safe="")}
+        if metadata["metadata_licence"] != "NOT_DECLARED_BY_RESPONSE" or metadata["updated"] is not None:
+            raise PacketError("research Crossref revision or licence was inferred")
+        published = metadata["published"]
+        if published is not None:
+            if not isinstance(published, str) or not re.fullmatch(r"\d{4}(?:-\d{2})?(?:-\d{2})?", published):
+                raise PacketError("research publication date is invalid")
+            fields = [int(field) for field in published.split("-")]
+            try:
+                date(*(fields + [1] * (3 - len(fields))))
+            except ValueError as exc:
+                raise PacketError("research publication date is invalid") from exc
+    if (not isinstance(provenance["request_url"], str) or provenance["request_url"] not in requests
+            or not research_timestamp(provenance["observed_at"])
+            or not isinstance(provenance["response_sha256"], str)
+            or not HEX_64.fullmatch(provenance["response_sha256"])
+            or type(provenance["response_bytes"]) is not int
+            or not 0 < provenance["response_bytes"] <= 256 * 1024
+            or provenance["source_authentication"] != "PUBLIC_HTTPS_METADATA_NOT_INDEPENDENT_ATTESTATION"):
+        raise PacketError("research metadata response receipt is invalid")
+    measured = sha256_bytes(canonical_bytes(metadata))
+    if row.get("source_revision") != measured or provenance["capture_sha256"] != measured:
+        raise PacketError("research metadata capture digest mismatch")
+    content = "\n".join((metadata["title"], "Authors: " + ", ".join(metadata["authors"]),
+                         "Identifier: " + identifier, "Publication date: " + str(metadata["published"]),
+                         "Categories: " + ", ".join(metadata["categories"]),
+                         "Metadata licence: " + metadata["metadata_licence"],
+                         "Full text licence: NOT_INFERRED", "Source: " + metadata["canonical_url"]))
+    # make_candidate in the producer strips trailing line whitespace before
+    # hashing. Empty authors/categories therefore end at the colon.
+    content = "\n".join(line.rstrip() for line in content.splitlines()).strip()[:1600]
+    if row.get("content") != content:
+        raise PacketError("research metadata content projection mismatch")
+
+
+def valid_candidate_revision(row: dict[str, Any]) -> bool:
+    """Keep Git object identity distinct from a public metadata capture digest.
+
+    The outer Second Brain commit binds the packet. A metadata digest binds only
+    the retained provider metadata; it is no independent source attestation and
+    supplies no paper text, licensing inference, or training authority.
+    """
+    revision = str(row.get("source_revision") or "")
+    revision_kind = row.get("source_revision_kind", "git-sha1")
+    repository = str(row.get("source_repository") or "")
+    if revision_kind == "git-sha1":
+        return (
+            HEX_40.fullmatch(revision) is not None
+            and not repository.startswith("public-metadata/")
+            and row.get("source_kind") != "research-metadata"
+        )
+    if revision_kind != "metadata-capture-sha256" or not HEX_64.fullmatch(revision):
+        return False
+    try:
+        validate_research_metadata(row)
+    except PacketError:
+        return False
+    return True
+
+
+
 def validate_packet(
     state_raw: bytes,
     candidates_raw: bytes,
@@ -235,9 +374,8 @@ def validate_packet(
         if not CANDIDATE_ID.fullmatch(candidate_id) or candidate_id in seen_ids:
             raise PacketError(f"candidate identity failed at line {line_number}")
         seen_ids.add(candidate_id)
-        revision = str(row.get("source_revision") or "")
         digest = str(row.get("content_sha256") or "")
-        if not HEX_40.fullmatch(revision) or not HEX_64.fullmatch(digest):
+        if not valid_candidate_revision(row) or not HEX_64.fullmatch(digest):
             raise PacketError(f"candidate source binding failed at line {line_number}")
         content = str(row.get("content") or "")
         if sha256_bytes(content.encode("utf-8")) != digest:
@@ -287,6 +425,7 @@ def build_input(
             "title": str(row.get("title") or ""),
             "source_repository": str(row.get("source_repository") or ""),
             "source_revision": row["source_revision"],
+            "source_revision_kind": row.get("source_revision_kind", "git-sha1"),
             "source_path": str(row.get("source_path") or ""),
             "source_kind": str(row.get("source_kind") or ""),
             "content_sha256": row["content_sha256"],
@@ -294,6 +433,8 @@ def build_input(
             "admission": str(row.get("admission") or ""),
             "untrusted_evidence_excerpt": content[:MAX_REVIEW_EXCERPT_CHARS],
         }
+        if row.get("source_revision_kind") == "metadata-capture-sha256":
+            candidate["source_authentication"] = METADATA_AUTHENTICATION
         quant_domain = row.get("quant_domain")
         if quant_domain is not None:
             candidate["quant_domain"] = str(quant_domain)

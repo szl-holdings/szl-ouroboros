@@ -140,6 +140,7 @@ jobs:
           mkdir -p inputs outputs
 
       - name: Prepare exact Second Brain frontier input
+        id: prepare
         env:
           GITHUB_TOKEN: ${{ github.token }}
         shell: bash
@@ -240,6 +241,7 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
+          PREPARATION_OUTCOME: ${{ steps.prepare.outcome || 'skipped' }}
           CODEX_CONFIGURED: ${{ steps.key.outputs.present || 'false' }}
           CODEX_OUTCOME: ${{ steps.codex.outcome || 'skipped' }}
           OPEN_REVIEWER_OUTCOME: ${{ steps.open_reviewer.outcome || 'skipped' }}
@@ -247,9 +249,7 @@ jobs:
           set -euo pipefail
           end_ms="$(date +%s%3N)"
           wall_start="$(cat /tmp/ouroboros-wall-start-ms)"
-          reviewer_start="$(cat /tmp/reviewer-start-ms)"
           wall_ms="$((end_ms - wall_start))"
-          reviewer_ms="$((end_ms - reviewer_start))"
 
           codex_attempted=false
           open_attempted=false
@@ -259,7 +259,16 @@ jobs:
             if [ "$OPEN_REVIEWER_OUTCOME" != "skipped" ]; then open_attempted=true; fi
           fi
 
+          # Preparation may fail before any reviewer timer exists. An unattempted
+          # reviewer contributes zero model time; an attempt requires its timer.
+          reviewer_ms=0
+          if [ "$codex_attempted" = "true" ] || [ "$open_attempted" = "true" ]; then
+            reviewer_start="$(cat /tmp/reviewer-start-ms)"
+            reviewer_ms="$((end_ms - reviewer_start))"
+          fi
+
           python scripts/finalize_codex_frontier_review.py \
+            --preparation-outcome "$PREPARATION_OUTCOME" \
             --source-receipt "$SOURCE_RECEIPT" \
             --candidates "$CANDIDATES" \
             --review "$REVIEW_OUTPUT" \
@@ -287,9 +296,9 @@ jobs:
 
           receipt = json.loads(Path(os.environ["LOOP_RECEIPT"]).read_text(encoding="utf-8"))
           loop = receipt["ouroboros"]
-          source = receipt["source"]
+          source = receipt["source"] or {}
           open_receipt_path = Path(os.environ["OPEN_EXECUTION_RECEIPT"])
-          provider = "openai-codex"
+          provider = "openai-codex" if receipt["codex"]["attempted"] else "NOT_ATTEMPTED"
           if open_receipt_path.is_file():
               open_receipt = json.loads(open_receipt_path.read_text(encoding="utf-8"))
               provider = open_receipt["provider"]["provider"]
@@ -302,9 +311,10 @@ jobs:
           print(f"- Codex configured: `{receipt['codex']['configured']}`")
           print(f"- Codex attempted: `{receipt['codex']['attempted']}`")
           print(f"- Keyless reviewer attempted: `{receipt['open_reviewer']['attempted']}`")
-          print(f"- Source revision: `{source['source_revision']}`")
-          print(f"- Candidate set: `{source['candidate_set_sha256']}`")
-          print(f"- Candidates: `{source['candidate_count']}`")
+          print(f"- Source preparation: `{receipt['preparation']['outcome']}`")
+          print(f"- Source revision: `{source.get('source_revision', 'UNAVAILABLE')}`")
+          print(f"- Candidate set: `{source.get('candidate_set_sha256', 'UNAVAILABLE')}`")
+          print(f"- Candidates: `{source.get('candidate_count', 'UNAVAILABLE')}`")
           print(f"- Loop exit: `{loop['exit']}`")
           print(f"- Within budget: `{loop['withinBudget']}`")
           print(f"- Receipt closed: `{loop['receiptsInEqOut']}`")
