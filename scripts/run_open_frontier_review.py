@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Run one evidence-bound frontier review with an open-weight model.
 
-The local model uses llama.cpp's generic JSON-object grammar for syntax only.
-The full frontier JSON Schema is not compiled into a model grammar because its
-bounded strings and candidate enum require independent validation. Generated
-JSON is always untrusted. A separate deterministic validator admits it or
-replaces it with an explicit BLOCKED receipt with no action authority.
+The local model uses a finite, hand-written GBNF contract for compact ASCII JSON.
+It bounds generated fields and lists before they can exhaust the token ceiling.
+The full frontier JSON Schema is not compiled into a native model grammar.
+Generated JSON is always untrusted: the existing independent validator admits
+it or replaces it with an explicit BLOCKED receipt with no action authority.
 
 The default provider is the public exact-revision SZL Khipu GGUF through a
 verified llama-cpp-python CPU wheel. An explicitly configured OpenAI-compatible
@@ -35,6 +35,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.finalize_codex_frontier_review import (  # noqa: E402
+    ALLOWED_CHANGE_TYPES,
+    ALLOWED_PRIORITIES,
+    ALLOWED_REPOSITORIES,
     ReviewError,
     validate_review,
 )
@@ -521,6 +524,81 @@ def resolve_model_path(explicit: Path | None) -> Path:
     return path
 
 
+def build_compact_generation_grammar(runtime_schema: dict[str, Any]) -> str:
+    """Bound local JSON generation without replacing independent admission.
+
+    This is a finite ASCII subset of the existing compact review contract, not
+    a general JSON-Schema compiler. Strings contain printable ASCII other than
+    quotes/backslashes, lists contain at most two entries, and no whitespace or
+    arbitrary property recursion is generated. Evidence uniqueness, advisory
+    text, schema, source binding and finish_reason remain independently checked.
+    """
+    try:
+        properties = runtime_schema["properties"]
+        digest = properties["candidate_set_sha256"]["const"]
+        candidate_ids = properties["recommendations"]["items"]["properties"][
+            "evidence_candidate_ids"
+        ]["items"]["enum"]
+    except (KeyError, TypeError) as exc:
+        raise OpenReviewerError("generation grammar requires an exact bound schema") from exc
+    if (not isinstance(digest, str) or not HEX_64.fullmatch(digest)
+            or not isinstance(candidate_ids, list)
+            or not 1 <= len(candidate_ids) <= MAX_SELECTED_CANDIDATES
+            or any(not isinstance(value, str) or not CANDIDATE_ID.fullmatch(value)
+                   for value in candidate_ids)
+            or len(set(candidate_ids)) != len(candidate_ids)):
+        raise OpenReviewerError("generation grammar evidence binding is invalid")
+
+    def literal(text: str) -> str:
+        return json.dumps(text, ensure_ascii=True)
+
+    def choices(values) -> str:
+        return " | ".join(literal(json.dumps(value)) for value in sorted(values))
+
+    prefix = '{"schema":' + json.dumps(REVIEW_SCHEMA) + ',"state":'
+    context = ',"candidate_set_sha256":' + json.dumps(digest) + ',"summary":'
+    authority = ',"authority":' + json.dumps(NONE_AUTHORITY, separators=(",", ":")) + "}"
+    rules = [
+        "root ::= proposed | no-action",
+        "prefix ::= " + literal(prefix),
+        "context ::= " + literal(context) + " summary",
+        "suffix ::= " + literal(authority),
+        'proposed ::= prefix ' + literal('"REVIEW_PROPOSED"')
+        + " context " + literal(',"recommendations":[') + " recommendation "
+        + literal("]") + " suffix",
+        'no-action ::= prefix ' + literal('"NO_ACTION_RECOMMENDED"')
+        + " context " + literal(',"recommendations":[]') + " suffix",
+        "recommendation ::= " + literal('{"id":"R01","priority":')
+        + " priority " + literal(',"target_repository":') + " target "
+        + literal(',"title":') + " title " + literal(',"rationale":') + " rationale "
+        + literal(',"evidence_candidate_ids":') + " evidence "
+        + literal(',"recommended_change_type":') + " change "
+        + literal(',"validation":') + " validation "
+        + literal(',"risk":') + " risk " + literal("}"),
+        "priority ::= " + choices(ALLOWED_PRIORITIES),
+        "target ::= " + choices(ALLOWED_REPOSITORIES),
+        "change ::= " + choices(ALLOWED_CHANGE_TYPES),
+        "evidence-id ::= " + choices(candidate_ids),
+        'evidence ::= "[" evidence-id ("," evidence-id)? "]"',
+        'validation ::= "[" validation-step ("," validation-step)? "]"',
+        r"first ::= [\x21\x23-\x5B\x5D-\x7E]",
+        r"char ::= [\x20-\x21\x23-\x5B\x5D-\x7E]",
+    ]
+    for name, key in (
+        ("summary", "summary_characters"),
+        ("title", "title_characters"),
+        ("rationale", "rationale_characters"),
+        ("risk", "risk_characters"),
+        ("validation-step", "validation_step_characters"),
+    ):
+        maximum = COMPACT_REVIEW_LIMITS[key]
+        rules.append(
+            name + " ::= " + literal('"') + " first char{0," + str(maximum - 1)
+            + "} " + literal('"')
+        )
+    return "\n".join(rules) + "\n"
+
+
 def run_local_gguf(
     *,
     messages: list[dict[str, str]],
@@ -530,16 +608,17 @@ def run_local_gguf(
     context_tokens: int,
     seed: int,
 ) -> tuple[str, dict[str, Any]]:
-    """Generate once with JSON syntax only; Python validates the full contract."""
-    del runtime_schema  # prompt data only; never compile the complex schema natively
+    """Generate one bounded JSON object; Python still owns review admission."""
+    grammar_text = build_compact_generation_grammar(runtime_schema)
     try:
-        from llama_cpp import Llama
+        from llama_cpp import Llama, LlamaGrammar
     except ImportError as exc:
         raise OpenReviewerError("llama-cpp-python is unavailable") from exc
 
     threads = max(1, min(4, os.cpu_count() or 2))
     started = time.monotonic()
     try:
+        grammar = LlamaGrammar.from_string(grammar_text, verbose=False)
         model = Llama(
             model_path=str(model_path),
             n_ctx=context_tokens,
@@ -554,7 +633,7 @@ def run_local_gguf(
         )
         response = model.create_chat_completion(
             messages=messages,
-            response_format={"type": "json_object"},
+            grammar=grammar,
             temperature=0.0,
             top_p=1.0,
             top_k=1,
@@ -585,6 +664,8 @@ def run_local_gguf(
         "key_required": False,
         "native_schema_grammar": False,
         "json_object_grammar": True,
+        "bounded_generation_grammar": "szl.ouroboros.compact-ascii-json/v1",
+        "generation_grammar_sha256": hashlib.sha256(grammar_text.encode("ascii")).hexdigest(),
         "independent_post_generation_validation": True,
         "finish_reason": choice.get("finish_reason"),
         "threads": threads,
@@ -745,6 +826,10 @@ def write_execution_receipt(
             "model_output_is_untrusted": True,
             "independent_validation_required": True,
             "native_schema_grammar_used": False,
+            "bounded_generation_grammar_used": (
+                provider_metadata.get("bounded_generation_grammar")
+                == "szl.ouroboros.compact-ascii-json/v1"
+            ),
             "private_graph_loaded": False,
             "weights_modified": False,
             "recommendations_executed": False,
