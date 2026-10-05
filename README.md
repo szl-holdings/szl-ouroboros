@@ -36,7 +36,7 @@ receipt with an unavailable source and no reviewer attempt. It does not require
 a reviewer timer that was never started. The final enforcement step remains red;
 receipt closure records the failure and never substitutes for a valid review.
 
-The provider chain is explicit:
+The default provider chain is explicit:
 
 1. use the existing pinned Codex action when `OPENAI_API_KEY` or
    `CODEX_API_KEY` is configured;
@@ -45,6 +45,29 @@ The provider chain is explicit:
    `llama-cpp-python` CPU wheel;
 3. fail closed if neither reviewer produces output that passes the independent
    schema, evidence, and authority validator.
+
+Manual workflow_dispatch runs also offer an optional reviewer choice:
+
+| Choice | Behavior |
+|---|---|
+| auto (default) | Use the existing provider chain above. |
+| local-gguf | Disable Codex authority for this run and use only the existing exact pinned CPU Khipu lane. |
+
+The choice is honored only for workflow_dispatch; scheduled, push, and other
+events retain automatic selection. Invalid manual values fail before source
+preparation or either reviewer. The local choice suppresses the API credential
+from the selection step and skips the Codex action even if an API key exists in
+the repository. It does not change secrets, select an external model endpoint,
+or weaken any model, evidence, output, timing, or authority gate.
+
+A secret-free outputs/reviewer-selection.json artifact records the event,
+controller revision, normalized request, selected lane, and effective Codex
+authority for that run. The existing loop receipt records Codex configured=false
+and attempted=false for explicit local runs, plus the actual local attempt and
+its outcome. Here configured describes authority enabled for this run; it does
+not claim that the repository has no secret. A selected lane is not evidence
+that the model completed. The native reviewer still must produce an admitted
+terminal result under the unchanged finalizer and enforcement gate.
 
 The loop is:
 
@@ -95,8 +118,8 @@ candidate limit even when more sources are available. The execution receipt
 records the total source candidate count and explicitly limits the review scope
 to selected public excerpts. It does not claim a full-portfolio review.
 
-The prompt and an additional independent output validator enforce the same
-compact contract:
+The prompt describes a compact contract and the independent output validator
+enforces it:
 
 | Output field | Maximum |
 |---|---:|
@@ -109,17 +132,28 @@ compact contract:
 | Validation steps | 2, each 120 characters |
 | Canonical complete review | 1,800 UTF-8 bytes |
 
-This addresses the concrete
-[2026-10-04 truncated run](https://github.com/szl-holdings/szl-ouroboros/actions/runs/37213923647),
-which selected 24 candidates and reached all 1,800 completion tokens with
-`finish_reason=length`. The workflow keeps its 1,800-token allowance, exact
-model/runtime pins, temperature, seed and one-attempt bound. The byte limit is a
-separate admission constraint, not a token-count guarantee. Any non-stop
+The earlier packet limits responded to a 24-candidate truncated run, but the
+[six-candidate run on 2026-10-05](https://github.com/szl-holdings/szl-ouroboros/actions/runs/37257722108)
+also ended with `OUTPUT_TRUNCATED`. A generic JSON-object grammar allowed
+unbounded strings and collections despite the prompt's limits.
+
+The local GGUF lane now uses a small, finite GBNF grammar for the exact digest
+and selected candidate IDs. It generates one compact ASCII JSON object with
+bounded strings, one recommendation, and at most two evidence IDs and validation
+steps. Text fields use printable ASCII without quotes or backslashes; model
+output remains subject to the unchanged independent validators, including
+evidence uniqueness and advisory-text checks. The full JSON Schema is not
+automatically compiled into a native grammar. Receipts retain the generation
+grammar version and SHA-256.
+
+The workflow keeps its 1,800-token allowance, exact model/runtime pins,
+temperature, seed and one-attempt bound. Grammar acceptance and byte limits do
+not establish useful model output or a successful live attempt. Any non-stop
 completion still fails closed as `OUTPUT_TRUNCATED` or
 `COMPLETION_NOT_STOPPED`; an otherwise valid general-schema review that exceeds
 the compact contract fails as `OUTPUT_BUDGET_CONTRACT`. No partial output is
-repaired or admitted. Actual replay receipts, not these source limits, establish
-whether a particular model attempt completed.
+repaired or admitted. A new exact-source live replay must retain an admitted
+terminal review and loop receipt before this lane is called operational.
 
 Neither provider
 can edit files, use repository credentials, train weights, promote candidates,

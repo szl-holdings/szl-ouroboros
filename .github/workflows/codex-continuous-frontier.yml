@@ -34,6 +34,14 @@ name: Ouroboros continuous frontier review
         description: "Reason for this bounded frontier review"
         required: false
         default: "manual frontier review"
+      reviewer:
+        description: "Reviewer for this manual run; local-gguf disables the Codex lane"
+        type: choice
+        required: false
+        default: auto
+        options:
+          - auto
+          - local-gguf
 
 permissions:
   contents: read
@@ -139,6 +147,27 @@ jobs:
           date +%s%3N > /tmp/ouroboros-wall-start-ms
           mkdir -p inputs outputs
 
+      - name: Validate the manual reviewer selection
+        id: selection
+        shell: bash
+        env:
+          REVIEW_EVENT_NAME: ${{ github.event_name }}
+          REVIEWER_REQUEST: ${{ github.event.inputs.reviewer || 'auto' }}
+        run: |
+          set -euo pipefail
+          python - <<'PY_SELECT'
+          import os
+          from pathlib import Path
+
+          mode = "auto"
+          if os.environ["REVIEW_EVENT_NAME"] == "workflow_dispatch":
+              mode = os.environ.get("REVIEWER_REQUEST", "auto")
+          if mode not in {"auto", "local-gguf"}:
+              raise SystemExit("::error::Invalid manual reviewer selection")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"mode={mode}\n")
+          PY_SELECT
+
       - name: Prepare exact Second Brain frontier input
         id: prepare
         env:
@@ -156,19 +185,43 @@ jobs:
         id: key
         shell: bash
         env:
-          CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.CODEX_API_KEY }}
+          REVIEWER_MODE: ${{ steps.selection.outputs.mode }}
+          CODEX_API_KEY: ${{ steps.selection.outputs.mode == 'auto' && (secrets.OPENAI_API_KEY || secrets.CODEX_API_KEY) || '' }}
         run: |
           set -euo pipefail
-          if [ -n "$CODEX_API_KEY" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "Codex API authority is configured; the existing read-only lane will run."
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "No Codex API authority is configured; the exact public Khipu GGUF will run keylessly."
-          fi
+          python - <<'PY_SELECT'
+          import json
+          import os
+          from pathlib import Path
+
+          mode = os.environ["REVIEWER_MODE"]
+          if mode not in {"auto", "local-gguf"}:
+              raise SystemExit("::error::Invalid normalized reviewer selection")
+          enabled = mode == "auto" and bool(os.environ.get("CODEX_API_KEY"))
+          selected = "codex" if enabled else "local-gguf"
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"present={str(enabled).lower()}\nreviewer={selected}\n")
+          receipt = {
+              "schema": "szl.ouroboros.reviewer-selection/v1",
+              "workflow_event": os.environ["GITHUB_EVENT_NAME"],
+              "controller_revision": os.environ["GITHUB_SHA"],
+              "requested_reviewer": mode,
+              "selected_reviewer": selected,
+              "codex_authority_enabled": enabled,
+          }
+          Path("outputs/reviewer-selection.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+          )
+          if mode == "local-gguf":
+              print("Manual local-gguf selected; Codex authority is disabled for this run.")
+          elif enabled:
+              print("Codex API authority is configured; the existing read-only lane will run.")
+          else:
+              print("No Codex API authority is configured; the exact public Khipu GGUF will run keylessly.")
+          PY_SELECT
 
       - name: Cache exact public Khipu model and verified wheel
-        if: steps.key.outputs.present != 'true'
+        if: steps.key.outputs.reviewer == 'local-gguf'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -177,7 +230,7 @@ jobs:
           key: khipu-open-reviewer-v1-13c1a1993063e1dff92f7413ccf48eaca6d48efc8801ae9af35961ae3396623a-d172f3d3c8cdd194c3c47c71cb077ed6e61354a2d0f939ceeac0c8fd29999596
 
       - name: Install verified keyless open-model runtime
-        if: steps.key.outputs.present != 'true'
+        if: steps.key.outputs.reviewer == 'local-gguf'
         shell: bash
         run: |
           set -euo pipefail
@@ -199,7 +252,7 @@ jobs:
 
       - name: Run Codex as a read-only advisory reviewer
         id: codex
-        if: steps.key.outputs.present == 'true'
+        if: steps.key.outputs.reviewer == 'codex' && steps.key.outputs.present == 'true'
         continue-on-error: true
         uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
         with:
@@ -217,7 +270,7 @@ jobs:
 
       - name: Run exact Khipu GGUF as the keyless advisory reviewer
         id: open_reviewer
-        if: steps.key.outputs.present != 'true'
+        if: steps.key.outputs.reviewer == 'local-gguf'
         continue-on-error: true
         shell: bash
         run: |
@@ -308,7 +361,12 @@ jobs:
           print(f"- Reviewer: `{provider}`")
           reviewer = receipt["open_reviewer"] if receipt["open_reviewer"]["attempted"] else receipt["codex"]
           print(f"- Model: `{reviewer['model'] or 'UNAVAILABLE'}`")
-          print(f"- Codex configured: `{receipt['codex']['configured']}`")
+          selection_path = Path("outputs/reviewer-selection.json")
+          if selection_path.is_file():
+              selection = json.loads(selection_path.read_text(encoding="utf-8"))
+              print(f"- Requested reviewer: {selection['requested_reviewer']}")
+              print(f"- Selected reviewer: {selection['selected_reviewer']}")
+          print(f"- Codex authority enabled for this run: `{receipt['codex']['configured']}`")
           print(f"- Codex attempted: `{receipt['codex']['attempted']}`")
           print(f"- Keyless reviewer attempted: `{receipt['open_reviewer']['attempted']}`")
           print(f"- Source preparation: `{receipt['preparation']['outcome']}`")
@@ -335,6 +393,7 @@ jobs:
           name: ouroboros-frontier-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             inputs/source-receipt.json
+            outputs/reviewer-selection.json
             outputs/codex-review.json
             outputs/open-reviewer-execution.json
             outputs/ouroboros-frontier-loop-receipt.json
