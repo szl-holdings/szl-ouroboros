@@ -36,7 +36,7 @@ does not touch Λ, which stays Conjecture 1.
 Quickstart:
 
     from kernels import get_kernel
-    ou = get_kernel("SZLHOLDINGS/szl-ouroboros", revision="main", trust_remote_code=True)
+    ou = get_kernel("SZLHOLDINGS/szl-ouroboros", version=1, trust_remote_code=True)
 
     attempts = [
         {"provider": "sovereign", "model": "own-metal", "ok": False, "latency_ms": 220, "node": "tower"},
