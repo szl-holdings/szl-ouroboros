@@ -57,7 +57,7 @@ jobs:
     timeout-minutes: 12
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
 
@@ -120,7 +120,7 @@ jobs:
       OPEN_MODEL_LABEL: SZLHOLDINGS/SZL-Khipu-1.5B-GGUF@67d60ec577730747055491640cfb91fc4a4b5d25:SZL-Khipu-1.5B-Q4_K_M.gguf
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
 
@@ -254,7 +254,7 @@ jobs:
         id: codex
         if: steps.key.outputs.reviewer == 'codex' && steps.key.outputs.present == 'true'
         continue-on-error: true
-        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY || secrets.CODEX_API_KEY }}
           prompt-file: prompts/codex-frontier-review.md
@@ -388,7 +388,7 @@ jobs:
 
       - name: Retain the secret-free review and loop receipts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ouroboros-frontier-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
