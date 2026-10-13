@@ -25,12 +25,13 @@ assert _spec and _spec.loader
 mirror = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mirror)
 
-# Pins proven by szl-holdings/szl-lambda-gate@29a0bd9 (run 36154245684) and kept by
-# the v2 lane at szl-lambda-gate@cf692173. The hub-sync pin is gone with the push lane.
+# Checkout and Python pins were proven by the Lambda Gate v2 lane.
+# upload-artifact v7.0.2 resolves to the exact upstream commit below;
+# the retired hub-sync action remains absent.
 PROVEN_PINS = {
     "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
     "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
-    "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
 }
 
 
