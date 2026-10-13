@@ -19,13 +19,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# The committed release mirror (.github/hf-mirror.json): the workflow binds the
-# credential, the publisher uploads and tags. The one-shot joblib quarantine
-# writer was removed once the Hub held no model.joblib; the source-side guard
+# The canonical kernel publisher (.github/hf-kernels.json): the workflow binds
+# the credential, the script pushes the kernel repo and the model-twin pointer
+# over Git (huggingface_hub cannot commit to kernel repos). It replaced the
+# model-only release mirror. The one-shot joblib quarantine writer was removed
+# once the Hub held no model.joblib; the source-side guard
 # (tests/test_no_unsafe_serialization.py) still refuses it.
 WRITERS = frozenset({
-    ".github/workflows/hf-mirror.yml",
-    "scripts/hf_mirror_release.py",
+    ".github/workflows/hf-kernel-publish.yml",
+    "scripts/szl_kernel_publish.py",
 })
 
 # Executable sources only. Tests, docs and data corpora are not writers.
@@ -43,6 +45,8 @@ HUB_WRITE = re.compile(
     r"|repo-files\s+delete|tag\s+create)\b"
     r"|huggingface/hub-sync@"
     r"|git\s+(?:push|remote\s+add)[^\n]*huggingface\.co"
+    # git push as an argv list: ["git", "push", ...] or a git wrapper called with "push".
+    r"|[\"']git[\"']\s*,\s*[\"']push[\"']|\(\s*[\"']push[\"']\s*,"
 )
 HF_SECRET = re.compile(r"secrets\.(?:HF_[A-Z0-9_]*|HUGGING[A-Z0-9_]*)\b")
 
@@ -94,11 +98,14 @@ class HubSingleWriter(unittest.TestCase):
             "hf upload SZLHOLDINGS/x .",
             "uses: huggingface/hub-sync@fdffea8e04104d0bd4e3181c5feb3025f0433ff5",
             "git push https://user:tok@huggingface.co/SZLHOLDINGS/x main",
+            'subprocess.run(["git", "push", "origin", "main"])',
+            'hub.run("push", "--porcelain", "origin", spec)',
         ):
             self.assertRegex(sample, HUB_WRITE)
         self.assertRegex("HF_TOKEN: ${{ secrets.HF_TOKEN || secrets.HF_ORG_TOKEN }}", HF_SECRET)
         for sample in ("hf_hub_download(repo_id=r, filename=f)", "HfApi().repo_info(r)",
-                       "snapshot_download(repo_id=r)", "ModelCard.load(path)"):
+                       "snapshot_download(repo_id=r)", "ModelCard.load(path)",
+                       'git(repo, "fetch", "-q", "origin")', "on:\n  push:\n    branches: [main]"):
             self.assertNotRegex(sample, HUB_WRITE)
 
 

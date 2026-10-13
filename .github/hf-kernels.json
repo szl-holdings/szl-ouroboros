@@ -1,0 +1,42 @@
+{
+  "schema": "szl.hf-kernels/v1",
+  "$comment": "Consumed by .github/workflows/hf-kernel-publish.yml via scripts/szl_kernel_publish.py. This GitHub repository is the single source for the Hub kernel repo kernels/SZLHOLDINGS/szl-ouroboros (main and v1) and the only writer of the model-repo pointer SZLHOLDINGS/szl-ouroboros.",
+  "kernels": [
+    {
+      "repo_id": "SZLHOLDINGS/szl-ouroboros",
+      "name": "szl-ouroboros",
+      "version": 1,
+      "license": "Apache-2.0",
+      "source_repository": "szl-holdings/szl-ouroboros",
+      "packages": [
+        { "src": "torch-ext/szl_ouroboros", "name": "szl_ouroboros" }
+      ],
+      "card": "hf/kernel-card.md",
+      "license_file": "LICENSE",
+      "extra_files": {},
+      "$why_prune_paths": "Frozen 2026-08-29 plates on the kernel repo (they cite kernels 0.16.1 and revision=\"main\"). The card is rendered from GitHub on every publish.",
+      "prune_paths": [
+        "OPERATIONAL.json",
+        "BENCH.laptop-blackwell.json"
+      ],
+      "python_depends": [],
+      "smoke": "hf/kernel_smoke.py",
+      "model_twin": {
+        "repo_id": "SZLHOLDINGS/szl-ouroboros",
+        "mode": "pointer",
+        "card": "hf/model-twin-pointer.md",
+        "$why_prune_paths": "The model twin is never loaded by kernels>=0.16. Its build/, root ouroboros.py, build.toml and the scripts/ and tests/ code copies are stale uploads; OPERATIONAL/BENCH are frozen 2026-08-29 plates. BOM, provenance and audit receipts, banner, LICENSE and SECURITY.md are kept.",
+        "prune_paths": [
+          "build/",
+          "torch-ext/",
+          "scripts/",
+          "tests/",
+          "ouroboros.py",
+          "build.toml",
+          "OPERATIONAL.json",
+          "BENCH.laptop-blackwell.json"
+        ]
+      }
+    }
+  ]
+}
