@@ -313,7 +313,7 @@ def finalize(
                     "provider": provider,
                     "model": active_model,
                     "ok": False,
-                    "latency_ms": max(0.0, latency_ms),
+                    "latency_ms": latency_ms,
                     "node": "scheduled-frontier-review",
                 }
             ]
@@ -332,7 +332,7 @@ def finalize(
                     "provider": provider,
                     "model": active_model,
                     "ok": state != "BLOCKED",
-                    "latency_ms": max(0.0, latency_ms),
+                    "latency_ms": latency_ms,
                     "node": "scheduled-frontier-review",
                 }
             ]
@@ -341,7 +341,7 @@ def finalize(
 
     loop = ouroboros.build_loop_trace(
         attempts,
-        wall_ms=max(0.0, wall_ms),
+        wall_ms=wall_ms,
         exit=exit_state,
         max_budget=1,
         steps=steps,
