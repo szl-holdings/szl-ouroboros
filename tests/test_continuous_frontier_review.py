@@ -628,3 +628,19 @@ def test_finalize_rejects_mutation_authority(tmp_path: Path) -> None:
             latency_ms=100.0,
             wall_ms=120.0,
         )
+
+
+@pytest.mark.parametrize("field", ["latency_ms", "wall_ms"])
+@pytest.mark.parametrize("invalid", [-1, float("nan"), float("inf"), True, False, "12.5"])
+def test_finalize_rejects_invalid_measured_timing_before_output(tmp_path, field, invalid):
+    source, candidates, review_path, _digest = write_finalize_fixture(tmp_path)
+    output = tmp_path / "loop-receipt.json"
+    timings = {"latency_ms": 10.0, "wall_ms": 20.0, field: invalid}
+    with pytest.raises(ValueError, match="finite.*nonnegative"):
+        finalize(
+            source_receipt_path=source, candidate_path=candidates,
+            review_path=review_path, output_path=output,
+            codex_attempted=True, codex_outcome="failure",
+            model="synthetic-test", **timings,
+        )
+    assert not output.exists()

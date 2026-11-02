@@ -251,3 +251,17 @@ import szl_ouroboros as local_kernel
 This selects local Python source rather than calling the Hub loader. Importing local
 source also executes Python. This documentation check does not run that import,
 install dependencies, qualify a runtime or establish a Hub publication.
+
+## Timing admission
+
+The local loop-tax kernel accepts finite, nonnegative `int`/`float` durations
+in milliseconds. Booleans, numeric strings, negative/non-finite durations and
+unrepresentable or overflowing totals raise `ValueError` before a timing trace
+is returned. The frontier receipt finalizer passes observations through without
+clamping them to zero; rejected timing cannot produce its output receipt.
+
+Zero-duration windows remain valid. `wall_ms=None` still means an unavailable
+wall measurement. A finite wall shorter than the sum of attempt windows retains
+the existing `wallLessThanModel` inconsistency flag. This validates the numeric
+domain only; it does not authenticate the upstream clock or prove that supplied
+values were measured. Counterfactual savings and doctrine labels are unchanged.

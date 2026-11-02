@@ -48,6 +48,7 @@ Quickstart:
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional, Sequence
 
 __all__ = [
@@ -123,17 +124,37 @@ DOCTRINE_FOOTER = (
 # --------------------------------------------------------------------------- #
 # Core windows — EXACTLY mirror backbone.ts sumAttemptMs/peakAttemptMs/deadHopMs
 # --------------------------------------------------------------------------- #
+def _milliseconds(value: Any, field: str) -> float:
+    """Admit observed durations without coercing booleans or numeric text."""
+    message = f"{field} must be a finite, nonnegative int or float"
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(message)
+    try:
+        duration = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if not math.isfinite(duration) or duration < 0:
+        raise ValueError(message)
+    return duration
+
+
 def _lat(attempt: Dict[str, Any]) -> float:
     v = attempt.get("latency_ms")
     if v is None:
         raise ValueError("each attempt must carry a MEASURED latency_ms window")
-    return float(v)
+    return _milliseconds(v, "latency_ms")
+
+
+def _finite_total(total: float) -> float:
+    if not math.isfinite(total):
+        raise ValueError("latency_ms sum must remain finite")
+    return total
 
 
 def sum_attempt_ms(attempts: Sequence[Dict[str, Any]]) -> float:
     """MEASURED model window: Σ of every attempt's wall window (success AND
     failed — a failed provider call still occupied the loop)."""
-    return sum(_lat(a) for a in attempts)
+    return _finite_total(sum(_lat(a) for a in attempts))
 
 
 def peak_attempt_ms(attempts: Sequence[Dict[str, Any]]) -> float:
@@ -151,7 +172,7 @@ def dead_hop_ms(attempts: Sequence[Dict[str, Any]]) -> float:
         if a.get("ok"):
             break
         acc += _lat(a)
-    return acc
+    return _finite_total(acc)
 
 
 def classify_exit(
@@ -183,6 +204,8 @@ def loop_tax(
 ) -> Dict[str, Any]:
     """Decompose a run's timing into the honest MEASURED/DERIVED loop-tax split.
 
+    Durations must be finite, nonnegative int/float values (not booleans or
+    numeric strings). Invalid windows and overflowing sums raise ValueError.
     `wall_ms=None` → the run wall was not measured, so overheadMs is UNAVAILABLE
     (never fabricated); the peak/serialization/deadHop split still holds because
     it needs only the attempt windows.
@@ -197,7 +220,7 @@ def loop_tax(
         overhead_label = "UNAVAILABLE"
         wall_lt_model = None
     else:
-        wall_ms = float(wall_ms)
+        wall_ms = _milliseconds(wall_ms, "wall_ms")
         overhead = max(0.0, wall_ms - model_ms)
         overhead_label = "DERIVED"
         # Honest flag: sequential loop ⇒ wall should be ≥ modelMs; a smaller
