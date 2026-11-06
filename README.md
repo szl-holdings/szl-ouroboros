@@ -265,3 +265,7 @@ wall measurement. A finite wall shorter than the sum of attempt windows retains
 the existing `wallLessThanModel` inconsistency flag. This validates the numeric
 domain only; it does not authenticate the upstream clock or prove that supplied
 values were measured. Counterfactual savings and doctrine labels are unchanged.
+
+## License
+
+Apache-2.0 — see [LICENSE](LICENSE).
