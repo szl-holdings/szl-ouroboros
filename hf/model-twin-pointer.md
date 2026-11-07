@@ -6,6 +6,8 @@ tags:
   - governance
   - ouroboros
   - loop-tax
+  - muyu
+  - ayllu-nawpa-yachay
   - provenance
   - doi:10.5281/zenodo.19944926
 ---
@@ -14,6 +16,12 @@ tags:
 
 
 # {{KERNEL_NAME}} has moved to the kernel repository
+
+
+House name: **Muyu**. Shared graph: **Ayllu Ñawpa Yachay**.
+
+Python backend source: [`szl-holdings/szl-ouroboros`](https://github.com/szl-holdings/szl-ouroboros).
+Frontend and agentic-loop product source: [`szl-holdings/platform`](https://github.com/szl-holdings/platform), package `@workspace/ouroboros-loop`. The archived repository `szl-holdings/ouroboros` is not the source. There is no Hugging Face Space for this kernel.
 
 This model repository holds no loadable build and no weights. The `kernels` library
 (0.16 and later) loads kernels only from the kernel repository:

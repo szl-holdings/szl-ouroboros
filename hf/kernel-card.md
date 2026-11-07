@@ -7,6 +7,8 @@ tags:
   - governance
   - ouroboros
   - loop-tax
+  - muyu
+  - ayllu-nawpa-yachay
   - provenance
   - doi:10.5281/zenodo.19944926
 ---
@@ -15,6 +17,12 @@ tags:
 
 
 # {{KERNEL_NAME}}
+
+
+House name: **Muyu**. Shared graph: **Ayllu Ñawpa Yachay**.
+
+Python backend source: [`szl-holdings/szl-ouroboros`](https://github.com/szl-holdings/szl-ouroboros).
+Frontend and agentic-loop product source: [`szl-holdings/platform`](https://github.com/szl-holdings/platform), package `@workspace/ouroboros-loop`. The archived repository `szl-holdings/ouroboros` is not the source. There is no Hugging Face Space for this kernel.
 
 Bounded agent-loop trace and loop-tax accounting as a pure-Python (noarch) kernel,
 published from GitHub [{{GITHUB_REPOSITORY}}](https://github.com/{{GITHUB_REPOSITORY}})

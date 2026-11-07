@@ -15,9 +15,14 @@
 [Product](https://a-11-oy.com) · [Proof](https://a11oy.net) · [GitHub organization](https://github.com/szl-holdings)
 <!-- /szl:header -->
 
-Kernel-twin repo for the Ouroboros bounded-loop package. **Not the TypeScript
+Kernel-twin repo for **Muyu**, the bounded-loop package (repository name `szl-ouroboros`). **Not the archived TypeScript
 product** [`szl-holdings/ouroboros`](https://github.com/szl-holdings/ouroboros).
 **Not a model. No weights.**
+
+House name: **Muyu**. Shared graph: **Ayllu Ñawpa Yachay** (the community's knowledge of what came before).
+
+Python backend source: this repository, [`szl-holdings/szl-ouroboros`](https://github.com/szl-holdings/szl-ouroboros).
+Frontend and agentic-loop product source: [`szl-holdings/platform`](https://github.com/szl-holdings/platform), package `@workspace/ouroboros-loop`. Web product surfaces in that repository are listed in `PRODUCT-SURFACES.md`. Hugging Face `SZLHOLDINGS` is the publish mirror, not the source. There is no Space `SZLHOLDINGS/szl-ouroboros`.
 
 Hub mirror: [`kernels/SZLHOLDINGS/szl-ouroboros`](https://huggingface.co/kernels/SZLHOLDINGS/szl-ouroboros).
 Card: [`SZLHOLDINGS/szl-ouroboros`](https://huggingface.co/SZLHOLDINGS/szl-ouroboros).
