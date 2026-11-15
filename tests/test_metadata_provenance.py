@@ -12,7 +12,7 @@ BUILD_METADATA = ROOT / "build" / "torch-universal" / "szl_ouroboros" / "metadat
 
 EXPECTED_DOI_PROVENANCE = {
     "lean_repo": "szl-holdings/lutar-lean",
-    "doi_lutar_lean": "10.5281/zenodo.20434308",
+    "doi_lutar_lean": "10.5281/zenodo.24239654",
     "doi_lutar_lean_record_status": "SUPERSEDED",
     "doi_lutar_lean_concept": "10.5281/zenodo.20434307",
     "doi_lutar_lean_concept_head_observed": "10.5281/zenodo.20517840",
