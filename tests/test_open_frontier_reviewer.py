@@ -220,6 +220,46 @@ def test_compact_review_counts_utf8_bytes_and_preserves_a_valid_small_review() -
     assert review["recommendations"] == []
 
 
+@pytest.mark.parametrize("placeholder", [
+    "risk:", "Risk", " test : ", "verify:", "validation:",
+    "check:", "TODO", ":", "...",
+])
+def test_real_run_label_only_validation_is_refused(placeholder) -> None:
+    # The live Khipu receipt from run 44738859864 admitted a bare "risk:".
+    # This is only a structural anti-placeholder check, not semantic review.
+    value = copy.deepcopy(proposed_review())
+    value["recommendations"][0]["validation"] = [
+        "Verify the exact source digest and expected rejection.", placeholder,
+    ]
+    review, admitted, admission, code = admit_or_block_model_output(
+        json.dumps(value), candidate_digest="d" * 64,
+        selected_candidate_ids=["frontier:" + "a" * 32],
+    )
+    assert admitted is False
+    assert admission == "MODEL_OUTPUT_REJECTED_FAIL_CLOSED"
+    assert code == "VALIDATION_PLACEHOLDER"
+    assert review["recommendations"] == []
+    assert all(v == "NONE" for v in review["authority"].values())
+
+
+@pytest.mark.parametrize("step", [
+    "Risk: confirm rollback on staging backup",
+    "Validation: rerun deterministic fixtures",
+    "Run unit tests and verify denial",
+])
+def test_compact_validation_preserves_nonplaceholder_steps(step) -> None:
+    value = copy.deepcopy(proposed_review())
+    value["recommendations"][0]["validation"] = [step]
+    review, admitted, admission, code = admit_or_block_model_output(
+        json.dumps(value), candidate_digest="d" * 64,
+        selected_candidate_ids=["frontier:" + "a" * 32],
+    )
+    assert admitted is True
+    assert admission == "MODEL_OUTPUT_ADMITTED"
+    assert code is None
+    assert review["recommendations"][0]["validation"] == [step]
+
+
 def test_projection_bounds_untrusted_candidate_content() -> None:
     candidate = row(
         "frontier:" + "a" * 32,
