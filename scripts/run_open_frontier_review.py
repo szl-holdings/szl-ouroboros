@@ -70,6 +70,11 @@ MAX_MODEL_OUTPUT_BYTES = 256 * 1024
 DEFAULT_MAX_TOKENS = 900
 DEFAULT_CONTEXT = 8_192
 DEFAULT_SEED = 749
+# Reject label-only model output as a validation step; this is a narrow
+# structural gate, not a claim to determine semantic test quality.
+VALIDATION_LABEL_ONLY = re.compile(
+    r"^(?:risk|test|validation|verify|check|step|todo|tbd|n/?a)\s*:?\s*$", re.I
+)
 COMPACT_REVIEW_LIMITS = {
     "maximum_recommendations": 1,
     "summary_characters": 120,
@@ -399,6 +404,8 @@ def _safe_failure_code(error: Exception) -> str:
     """Classify a rejection without retaining untrusted model text or error values."""
     message = str(error)
     if isinstance(error, OpenReviewerError):
+        if "validation step placeholder" in message:
+            return "VALIDATION_PLACEHOLDER"
         if "compact output budget" in message:
             return "OUTPUT_BUDGET_CONTRACT"
         if "byte ceiling" in message:
@@ -483,6 +490,10 @@ def validate_compact_review(value: dict[str, Any]) -> None:
                 or len(recommendation["validation"]) > limits["maximum_validation_steps"]
                 or any(len(step) > limits["validation_step_characters"] for step in recommendation["validation"])):
             raise OpenReviewerError("compact output budget exceeded")
+        for step in recommendation["validation"]:
+            if (VALIDATION_LABEL_ONLY.fullmatch(step.strip())
+                    or not any(char.isalnum() for char in step)):
+                raise OpenReviewerError("validation step placeholder")
 
 
 def verify_model_file(
