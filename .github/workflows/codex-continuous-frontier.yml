@@ -411,7 +411,7 @@ jobs:
         run: |
           set -euo pipefail
           test -s "$LOOP_RECEIPT"
-          state="$(python -c 'import json,os; print(json.load(open(os.environ["LOOP_RECEIPT"]))["state"])')"
+          state="$(python .github/scripts/strict_terminal_state.py "$LOOP_RECEIPT")"
           if [ "$CODEX_CONFIGURED" = "true" ]; then
             test "$CODEX_OUTCOME" = "success"
           else

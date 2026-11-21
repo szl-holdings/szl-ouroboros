@@ -644,3 +644,116 @@ def test_finalize_rejects_invalid_measured_timing_before_output(tmp_path, field,
             model="synthetic-test", **timings,
         )
     assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_success"),
+    [
+        ("REVIEW_PROPOSED", True),
+        ("NO_ACTION_RECOMMENDED", True),
+        ("BLOCKED", False),
+        ("REVIEW_PROPOSED\n", False),
+        ("NO_ACTION_RECOMMENDED\n\n", False),
+        ("INVALID", False),
+        (None, False),
+    ],
+)
+def test_terminal_state_guard_is_strict(
+    tmp_path: Path, state: str | None, expected_success: bool
+) -> None:
+    """Exercise the exact inline shell step against synthetic terminal receipts."""
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github/workflows/codex-continuous-frontier.yml"
+    ).read_text(encoding="utf-8")
+    tail = workflow.split("      - name: Enforce honest terminal state\n", 1)[1]
+    lines = tail.split("        run: |\n", 1)[1].splitlines()
+    script = []
+    for line in lines:
+        if not line.startswith("          "):
+            break
+        script.append(line[10:])
+    assert script
+    receipt = tmp_path / "loop.json"
+    receipt.write_text(json.dumps({"state": state}), encoding="utf-8")
+    open_receipt = tmp_path / "open.json"
+    open_receipt.write_text("{}", encoding="utf-8")
+    env = {
+        **os.environ,
+        "LOOP_RECEIPT": str(receipt),
+        "OPEN_EXECUTION_RECEIPT": str(open_receipt),
+        "CODEX_CONFIGURED": "false",
+        "CODEX_OUTCOME": "skipped",
+        "OPEN_REVIEWER_OUTCOME": "success",
+        "FINALIZE_OUTCOME": "success",
+    }
+    result = subprocess.run(
+        ["bash", "-c", "\n".join(script)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is expected_success, result.stderr + result.stdout
+
+
+@pytest.mark.parametrize(
+    ("raw_receipt", "expected_success"),
+    [
+        (b'{"state":"REVIEW_PROPOSED"}', True),
+        (b'{"state":"NO_ACTION_RECOMMENDED"}', True),
+        (b'{"state":"BLOCKED"}', False),
+        (b'{"state":"REVIEW_PROPOSED\n"}', False),
+        (b'{"state":"NO_ACTION_RECOMMENDED\n\n"}', False),
+        (b'{"state":"INVALID"}', False),
+        (b'{"state":null}', False),
+        (b'{"unrelated":1}', False),
+        (b'{"state":"BLOCKED","state":"REVIEW_PROPOSED"}', False),
+        (b'{"state":"REVIEW_PROPOSED","state":"REVIEW_PROPOSED"}', False),
+        (b'{"state":"REVIEW_PROPOSED","meta":{"a":1,"a":2}}', False),
+        (b'{"state":"REVIEW_PROPOSED","meta":NaN}', False),
+        (b'{"state":"REVIEW_PROPOSED","meta":Infinity}', False),
+        (b'{"state":"REVIEW_PROPOSED","meta":-Infinity}', False),
+        (b'{"state":"REVIEW_PROPOSED","meta":1e999}', False),
+        (b'{"state":"REVIEW_PROPOSED","meta":1.2}', True),
+        (b'{"state":"REVIEW_PROPOSED","meta":"\xff"}', False),
+        (b'{"state":"REVIEW_PROPOSED"} trailing', False),
+    ],
+)
+def test_terminal_state_guard_rejects_nonstandard_json(
+    tmp_path: Path, raw_receipt: bytes, expected_success: bool
+) -> None:
+    """Execute the real workflow shell step on public-source synthetic receipts."""
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/codex-continuous-frontier.yml").read_text(
+        encoding="utf-8"
+    )
+    tail = workflow.split("      - name: Enforce honest terminal state\n", 1)[1]
+    lines = tail.split("        run: |\n", 1)[1].splitlines()
+    script = []
+    for line in lines:
+        if not line.startswith("          "):
+            break
+        script.append(line[10:])
+    assert script
+    receipt = tmp_path / "loop.json"
+    receipt.write_bytes(raw_receipt)
+    open_receipt = tmp_path / "open.json"
+    open_receipt.write_text("{}", encoding="utf-8")
+    env = {
+        **os.environ,
+        "LOOP_RECEIPT": str(receipt),
+        "OPEN_EXECUTION_RECEIPT": str(open_receipt),
+        "CODEX_CONFIGURED": "false",
+        "CODEX_OUTCOME": "skipped",
+        "OPEN_REVIEWER_OUTCOME": "success",
+        "FINALIZE_OUTCOME": "success",
+    }
+    result = subprocess.run(
+        ["bash", "-c", "\n".join(script)],
+        env=env,
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is expected_success, result.stderr + result.stdout
