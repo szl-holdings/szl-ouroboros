@@ -20,6 +20,7 @@ import argparse
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -382,8 +383,22 @@ def parse_single_json_object(raw: str) -> dict[str, Any]:
             value[key] = member
         return value
 
+    # Python otherwise accepts NaN/Infinity and can overflow valid exponent
+    # syntax to infinity. Neither may enter the independent review parser.
+    def reject_nonfinite_constant(_literal: str) -> float:
+        raise OpenReviewerError("open reviewer JSON contains non-finite number")
+
+    def finite_float(literal: str) -> float:
+        number = float(literal)
+        if not math.isfinite(number):
+            raise OpenReviewerError("open reviewer JSON contains non-finite number")
+        return number
+
     try:
-        value = json.loads(text, object_pairs_hook=unique_members)
+        value = json.loads(
+            text, object_pairs_hook=unique_members,
+            parse_constant=reject_nonfinite_constant, parse_float=finite_float,
+        )
     except json.JSONDecodeError as exc:
         raise OpenReviewerError("open reviewer did not return one JSON object") from exc
     if not isinstance(value, dict):
@@ -415,6 +430,8 @@ def _safe_failure_code(error: Exception) -> str:
     """Classify a rejection without retaining untrusted model text or error values."""
     message = str(error)
     if isinstance(error, OpenReviewerError):
+        if "non-finite number" in message:
+            return "OUTPUT_NONFINITE_JSON_NUMBER"
         if "duplicate object member" in message:
             return "OUTPUT_DUPLICATE_JSON_MEMBER"
         if "validation step placeholder" in message:
