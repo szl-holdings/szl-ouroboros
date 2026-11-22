@@ -297,6 +297,34 @@ def test_parse_single_json_object_is_strict_but_accepts_one_json_fence() -> None
         parse_single_json_object("[]")
 
 
+@pytest.mark.parametrize(
+    ("original", "injected"),
+    [
+        ('"summary": ', '"summary": "untrusted shadow", "summary": '),
+        ('"validation": ', '"validation": ["TODO"], "validation": '),
+    ],
+)
+def test_duplicate_model_json_members_fail_closed_at_any_depth(
+    original: str, injected: str,
+) -> None:
+    raw = json.dumps(proposed_review())
+    assert raw.count(original) == 1
+    duplicated = raw.replace(original, injected, 1)
+
+    with pytest.raises(OpenReviewerError, match="duplicate object member"):
+        parse_single_json_object(duplicated)
+    review, admitted, admission, failure = admit_or_block_model_output(
+        duplicated, candidate_digest="d" * 64,
+        selected_candidate_ids=["frontier:" + "a" * 32],
+    )
+    assert admitted is False
+    assert admission == "MODEL_OUTPUT_REJECTED_FAIL_CLOSED"
+    assert failure == "OUTPUT_DUPLICATE_JSON_MEMBER"
+    assert review["state"] == "BLOCKED"
+    assert review["recommendations"] == []
+    assert all(value == "NONE" for value in review["authority"].values())
+
+
 def test_post_generation_admission_accepts_exact_no_action_review() -> None:
     digest = "d" * 64
     candidate_id = "frontier:" + "a" * 32

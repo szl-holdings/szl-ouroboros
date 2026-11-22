@@ -20,6 +20,7 @@ import argparse
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -67,6 +68,7 @@ DEFAULT_SELECTED_CANDIDATES = 6
 MAX_EXCERPT_CHARS = 720
 MAX_PROMPT_BYTES = 96 * 1024
 MAX_MODEL_OUTPUT_BYTES = 256 * 1024
+MAX_JSON_INTEGER_DIGITS = 512
 DEFAULT_MAX_TOKENS = 900
 DEFAULT_CONTEXT = 8_192
 DEFAULT_SEED = 749
@@ -136,9 +138,35 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _unique_json_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous JSON members before any evidence is admitted."""
+    value: dict[str, Any] = {}
+    for key, member in pairs:
+        if key in value:
+            raise OpenReviewerError("open reviewer JSON contains duplicate object member")
+        value[key] = member
+    return value
+
+
 def read_json_object(path: Path, *, label: str) -> dict[str, Any]:
+    # Source receipts and review schemas must obey strict JSON numbers too.
+    # Default json.loads would silently admit NaN/Infinity and 1e400.
+    def reject_nonfinite_source_number(_literal: str) -> float:
+        raise OpenReviewerError(f"{label} JSON contains non-finite number")
+
+    def finite_source_float(literal: str) -> float:
+        number = float(literal)
+        if not math.isfinite(number):
+            raise OpenReviewerError(f"{label} JSON contains non-finite number")
+        return number
+
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_members,
+            parse_constant=reject_nonfinite_source_number,
+            parse_float=finite_source_float,
+        )
     except (OSError, json.JSONDecodeError) as exc:
         raise OpenReviewerError(f"{label} is not a readable JSON object") from exc
     if not isinstance(value, dict):
@@ -362,7 +390,13 @@ def build_messages(
 
 
 def parse_single_json_object(raw: str) -> dict[str, Any]:
-    if len(raw.encode("utf-8")) > MAX_MODEL_OUTPUT_BYTES:
+    # Provider JSON decoding can yield a raw lone Unicode surrogate. Encoding
+    # must fail closed instead of leaking UnicodeEncodeError past admission.
+    try:
+        output_bytes = len(raw.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise OpenReviewerError("open reviewer output contains invalid Unicode") from exc
+    if output_bytes > MAX_MODEL_OUTPUT_BYTES:
         raise OpenReviewerError("open reviewer output exceeded its byte ceiling")
     text = raw.strip()
     if text.startswith("```") and text.endswith("```"):
@@ -371,8 +405,37 @@ def parse_single_json_object(raw: str) -> dict[str, Any]:
             text = "\n".join(lines[1:-1]).strip()
             if text.startswith("json\n"):
                 text = text[5:].lstrip()
+    # Object member duplication is ambiguous across JSON consumers. Reject it
+    # at every depth before schema validation, without quoting model-provided
+    # member names or values in diagnostics.
+    # Python otherwise accepts NaN/Infinity and can overflow valid exponent
+    # syntax to infinity. Neither may enter the independent review parser.
+    def reject_nonfinite_constant(_literal: str) -> float:
+        raise OpenReviewerError("open reviewer JSON contains non-finite number")
+
+    def finite_float(literal: str) -> float:
+        number = float(literal)
+        if not math.isfinite(number):
+            raise OpenReviewerError("open reviewer JSON contains non-finite number")
+        return number
+
+    # A syntactically valid huge integer may raise ValueError in Python's
+    # JSON scanner before schema admission. Bound conversions consistently
+    # across interpreter-level integer-string limits and fail closed.
+    def bounded_int(literal: str) -> int:
+        if len(literal.lstrip("-")) > MAX_JSON_INTEGER_DIGITS:
+            raise OpenReviewerError("open reviewer JSON integer digit ceiling exceeded")
+        try:
+            return int(literal)
+        except ValueError as exc:
+            raise OpenReviewerError("open reviewer JSON integer digit ceiling exceeded") from exc
+
     try:
-        value = json.loads(text)
+        value = json.loads(
+            text, object_pairs_hook=_unique_json_members,
+            parse_constant=reject_nonfinite_constant, parse_float=finite_float,
+            parse_int=bounded_int,
+        )
     except json.JSONDecodeError as exc:
         raise OpenReviewerError("open reviewer did not return one JSON object") from exc
     if not isinstance(value, dict):
@@ -402,8 +465,18 @@ def blocked_review(candidate_digest: str) -> dict[str, Any]:
 
 def _safe_failure_code(error: Exception) -> str:
     """Classify a rejection without retaining untrusted model text or error values."""
+    if isinstance(error, UnicodeError):
+        return "OUTPUT_INVALID_UNICODE"
     message = str(error)
     if isinstance(error, OpenReviewerError):
+        if "invalid Unicode" in message:
+            return "OUTPUT_INVALID_UNICODE"
+        if "non-finite number" in message:
+            return "OUTPUT_NONFINITE_JSON_NUMBER"
+        if "integer digit ceiling" in message:
+            return "OUTPUT_JSON_INTEGER_TOO_LONG"
+        if "duplicate object member" in message:
+            return "OUTPUT_DUPLICATE_JSON_MEMBER"
         if "validation step placeholder" in message:
             return "VALIDATION_PLACEHOLDER"
         if "compact output budget" in message:
@@ -802,6 +875,16 @@ def write_execution_receipt(
     admission_state: str = "MODEL_OUTPUT_ADMITTED",
     failure_code: str | None = None,
 ) -> dict[str, Any]:
+    # Literal unpaired surrogates are rejected by model-output admission, but
+    # encoding them here must not abort the independent BLOCKED receipt. No
+    # SHA-256 of nonexistent valid UTF-8 bytes may be asserted.
+    try:
+        raw_output_sha256 = hashlib.sha256(raw_output.encode("utf-8")).hexdigest()
+    except UnicodeEncodeError as exc:
+        if model_output_admitted or failure_code != "OUTPUT_INVALID_UNICODE":
+            raise OpenReviewerError("invalid Unicode requires blocked admission") from exc
+        raw_output_sha256 = None
+
     core: dict[str, Any] = {
         "schema": EXECUTION_SCHEMA,
         "state": (
@@ -821,7 +904,7 @@ def write_execution_receipt(
         "compact_output_limits": dict(COMPACT_REVIEW_LIMITS),
         "canonical_review_utf8_bytes": len(canonical_bytes(review)),
         "prompt_sha256": hashlib.sha256(canonical_bytes(messages)).hexdigest(),
-        "raw_output_sha256": hashlib.sha256(raw_output.encode("utf-8")).hexdigest(),
+        "raw_output_sha256": raw_output_sha256,
         "review_sha256": hashlib.sha256(canonical_bytes(review)).hexdigest(),
         "admission": {
             "state": admission_state,
@@ -847,6 +930,8 @@ def write_execution_receipt(
             "lambda": "CONJECTURE_1",
         },
     }
+    if raw_output_sha256 is None:
+        core["raw_output_hash_state"] = "UNAVAILABLE_INVALID_UNICODE"
     core["receipt_sha256"] = hashlib.sha256(canonical_bytes(core)).hexdigest()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
