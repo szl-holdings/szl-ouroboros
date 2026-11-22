@@ -364,7 +364,13 @@ def build_messages(
 
 
 def parse_single_json_object(raw: str) -> dict[str, Any]:
-    if len(raw.encode("utf-8")) > MAX_MODEL_OUTPUT_BYTES:
+    # Provider JSON decoding can yield a raw lone Unicode surrogate. Encoding
+    # must fail closed instead of leaking UnicodeEncodeError past admission.
+    try:
+        output_bytes = len(raw.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise OpenReviewerError("open reviewer output contains invalid Unicode") from exc
+    if output_bytes > MAX_MODEL_OUTPUT_BYTES:
         raise OpenReviewerError("open reviewer output exceeded its byte ceiling")
     text = raw.strip()
     if text.startswith("```") and text.endswith("```"):
@@ -441,8 +447,12 @@ def blocked_review(candidate_digest: str) -> dict[str, Any]:
 
 def _safe_failure_code(error: Exception) -> str:
     """Classify a rejection without retaining untrusted model text or error values."""
+    if isinstance(error, UnicodeError):
+        return "OUTPUT_INVALID_UNICODE"
     message = str(error)
     if isinstance(error, OpenReviewerError):
+        if "invalid Unicode" in message:
+            return "OUTPUT_INVALID_UNICODE"
         if "non-finite number" in message:
             return "OUTPUT_NONFINITE_JSON_NUMBER"
         if "integer digit ceiling" in message:
