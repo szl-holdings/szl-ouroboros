@@ -68,6 +68,7 @@ DEFAULT_SELECTED_CANDIDATES = 6
 MAX_EXCERPT_CHARS = 720
 MAX_PROMPT_BYTES = 96 * 1024
 MAX_MODEL_OUTPUT_BYTES = 256 * 1024
+MAX_JSON_INTEGER_DIGITS = 512
 DEFAULT_MAX_TOKENS = 900
 DEFAULT_CONTEXT = 8_192
 DEFAULT_SEED = 749
@@ -394,10 +395,22 @@ def parse_single_json_object(raw: str) -> dict[str, Any]:
             raise OpenReviewerError("open reviewer JSON contains non-finite number")
         return number
 
+    # A syntactically valid huge integer may raise ValueError in Python's
+    # JSON scanner before schema admission. Bound conversions consistently
+    # across interpreter-level integer-string limits and fail closed.
+    def bounded_int(literal: str) -> int:
+        if len(literal.lstrip("-")) > MAX_JSON_INTEGER_DIGITS:
+            raise OpenReviewerError("open reviewer JSON integer digit ceiling exceeded")
+        try:
+            return int(literal)
+        except ValueError as exc:
+            raise OpenReviewerError("open reviewer JSON integer digit ceiling exceeded") from exc
+
     try:
         value = json.loads(
             text, object_pairs_hook=unique_members,
             parse_constant=reject_nonfinite_constant, parse_float=finite_float,
+            parse_int=bounded_int,
         )
     except json.JSONDecodeError as exc:
         raise OpenReviewerError("open reviewer did not return one JSON object") from exc
@@ -432,6 +445,8 @@ def _safe_failure_code(error: Exception) -> str:
     if isinstance(error, OpenReviewerError):
         if "non-finite number" in message:
             return "OUTPUT_NONFINITE_JSON_NUMBER"
+        if "integer digit ceiling" in message:
+            return "OUTPUT_JSON_INTEGER_TOO_LONG"
         if "duplicate object member" in message:
             return "OUTPUT_DUPLICATE_JSON_MEMBER"
         if "validation step placeholder" in message:
