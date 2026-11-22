@@ -371,8 +371,19 @@ def parse_single_json_object(raw: str) -> dict[str, Any]:
             text = "\n".join(lines[1:-1]).strip()
             if text.startswith("json\n"):
                 text = text[5:].lstrip()
+    # Object member duplication is ambiguous across JSON consumers. Reject it
+    # at every depth before schema validation, without quoting model-provided
+    # member names or values in diagnostics.
+    def unique_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, member in pairs:
+            if key in value:
+                raise OpenReviewerError("open reviewer JSON contains duplicate object member")
+            value[key] = member
+        return value
+
     try:
-        value = json.loads(text)
+        value = json.loads(text, object_pairs_hook=unique_members)
     except json.JSONDecodeError as exc:
         raise OpenReviewerError("open reviewer did not return one JSON object") from exc
     if not isinstance(value, dict):
@@ -404,6 +415,8 @@ def _safe_failure_code(error: Exception) -> str:
     """Classify a rejection without retaining untrusted model text or error values."""
     message = str(error)
     if isinstance(error, OpenReviewerError):
+        if "duplicate object member" in message:
+            return "OUTPUT_DUPLICATE_JSON_MEMBER"
         if "validation step placeholder" in message:
             return "VALIDATION_PLACEHOLDER"
         if "compact output budget" in message:
