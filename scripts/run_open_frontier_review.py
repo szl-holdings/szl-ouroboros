@@ -149,9 +149,23 @@ def _unique_json_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def read_json_object(path: Path, *, label: str) -> dict[str, Any]:
+    # Source receipts and review schemas must obey strict JSON numbers too.
+    # Default json.loads would silently admit NaN/Infinity and 1e400.
+    def reject_nonfinite_source_number(_literal: str) -> float:
+        raise OpenReviewerError(f"{label} JSON contains non-finite number")
+
+    def finite_source_float(literal: str) -> float:
+        number = float(literal)
+        if not math.isfinite(number):
+            raise OpenReviewerError(f"{label} JSON contains non-finite number")
+        return number
+
     try:
         value = json.loads(
-            path.read_text(encoding="utf-8"), object_pairs_hook=_unique_json_members
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_members,
+            parse_constant=reject_nonfinite_source_number,
+            parse_float=finite_source_float,
         )
     except (OSError, json.JSONDecodeError) as exc:
         raise OpenReviewerError(f"{label} is not a readable JSON object") from exc
