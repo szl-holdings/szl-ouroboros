@@ -138,9 +138,21 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _unique_json_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous JSON members before any evidence is admitted."""
+    value: dict[str, Any] = {}
+    for key, member in pairs:
+        if key in value:
+            raise OpenReviewerError("open reviewer JSON contains duplicate object member")
+        value[key] = member
+    return value
+
+
 def read_json_object(path: Path, *, label: str) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_unique_json_members
+        )
     except (OSError, json.JSONDecodeError) as exc:
         raise OpenReviewerError(f"{label} is not a readable JSON object") from exc
     if not isinstance(value, dict):
@@ -382,14 +394,6 @@ def parse_single_json_object(raw: str) -> dict[str, Any]:
     # Object member duplication is ambiguous across JSON consumers. Reject it
     # at every depth before schema validation, without quoting model-provided
     # member names or values in diagnostics.
-    def unique_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        value: dict[str, Any] = {}
-        for key, member in pairs:
-            if key in value:
-                raise OpenReviewerError("open reviewer JSON contains duplicate object member")
-            value[key] = member
-        return value
-
     # Python otherwise accepts NaN/Infinity and can overflow valid exponent
     # syntax to infinity. Neither may enter the independent review parser.
     def reject_nonfinite_constant(_literal: str) -> float:
@@ -414,7 +418,7 @@ def parse_single_json_object(raw: str) -> dict[str, Any]:
 
     try:
         value = json.loads(
-            text, object_pairs_hook=unique_members,
+            text, object_pairs_hook=_unique_json_members,
             parse_constant=reject_nonfinite_constant, parse_float=finite_float,
             parse_int=bounded_int,
         )
