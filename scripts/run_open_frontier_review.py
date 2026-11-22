@@ -857,6 +857,16 @@ def write_execution_receipt(
     admission_state: str = "MODEL_OUTPUT_ADMITTED",
     failure_code: str | None = None,
 ) -> dict[str, Any]:
+    # Literal unpaired surrogates are rejected by model-output admission, but
+    # encoding them here must not abort the independent BLOCKED receipt. No
+    # SHA-256 of nonexistent valid UTF-8 bytes may be asserted.
+    try:
+        raw_output_sha256 = hashlib.sha256(raw_output.encode("utf-8")).hexdigest()
+    except UnicodeEncodeError as exc:
+        if model_output_admitted or failure_code != "OUTPUT_INVALID_UNICODE":
+            raise OpenReviewerError("invalid Unicode requires blocked admission") from exc
+        raw_output_sha256 = None
+
     core: dict[str, Any] = {
         "schema": EXECUTION_SCHEMA,
         "state": (
@@ -876,7 +886,7 @@ def write_execution_receipt(
         "compact_output_limits": dict(COMPACT_REVIEW_LIMITS),
         "canonical_review_utf8_bytes": len(canonical_bytes(review)),
         "prompt_sha256": hashlib.sha256(canonical_bytes(messages)).hexdigest(),
-        "raw_output_sha256": hashlib.sha256(raw_output.encode("utf-8")).hexdigest(),
+        "raw_output_sha256": raw_output_sha256,
         "review_sha256": hashlib.sha256(canonical_bytes(review)).hexdigest(),
         "admission": {
             "state": admission_state,
@@ -902,6 +912,8 @@ def write_execution_receipt(
             "lambda": "CONJECTURE_1",
         },
     }
+    if raw_output_sha256 is None:
+        core["raw_output_hash_state"] = "UNAVAILABLE_INVALID_UNICODE"
     core["receipt_sha256"] = hashlib.sha256(canonical_bytes(core)).hexdigest()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
