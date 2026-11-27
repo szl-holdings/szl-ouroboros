@@ -8,7 +8,7 @@ The full frontier JSON Schema is not compiled into a native model grammar.
 Generated JSON is always untrusted: the existing independent validator admits
 it or replaces it with an explicit BLOCKED receipt with no action authority.
 
-The default provider is the public exact-revision SZL Khipu GGUF through a
+The default provider is the public exact-revision SZL keyless reviewer GGUF through a
 verified llama-cpp-python CPU wheel. An explicitly configured OpenAI-compatible
 local endpoint (Ollama, vLLM, or llama.cpp server) is also supported. No API key,
 private graph, training, execution, merge, deployment, promotion, or provider
@@ -44,11 +44,11 @@ from scripts.finalize_codex_frontier_review import (  # noqa: E402
 )
 from scripts.prepare_codex_frontier_review import validate_packet  # noqa: E402
 
-MODEL_REPOSITORY = "SZLHOLDINGS/SZL-Khipu-1.5B-GGUF"
-MODEL_REVISION = "67d60ec577730747055491640cfb91fc4a4b5d25"
-MODEL_FILENAME = "SZL-Khipu-1.5B-Q4_K_M.gguf"
-MODEL_SHA256 = "13c1a1993063e1dff92f7413ccf48eaca6d48efc8801ae9af35961ae3396623a"
-MODEL_SIZE = 986_047_904
+MODEL_REPOSITORY = "SZLHOLDINGS/SZL-Qwen2.5-7B-Instruct-GGUF"
+MODEL_REVISION = "e016973495381872a3008566610b8126f1941eee"
+MODEL_FILENAME = "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+MODEL_SHA256 = "3e357ab3eda2c442f25c0080bb8998eedc05fd16ce1728eacff9ccc5c3d240c6"
+MODEL_SIZE = 4_683_073_952
 MODEL_LABEL = f"{MODEL_REPOSITORY}@{MODEL_REVISION}:{MODEL_FILENAME}"
 
 SOURCE_SCHEMA = "szl.ouroboros.codex-frontier-source/v1"
@@ -601,7 +601,7 @@ def resolve_model_path(explicit: Path | None) -> Path:
             )
         except Exception as exc:
             raise OpenReviewerError(
-                f"public Khipu model retrieval failed: {type(exc).__name__}"
+                f"public keyless reviewer model retrieval failed: {type(exc).__name__}"
             ) from exc
         path = Path(resolved).resolve()
     verify_model_file(path)
@@ -727,15 +727,15 @@ def run_local_gguf(
             stream=False,
         )
     except Exception as exc:
-        raise OpenReviewerError(f"local Khipu inference failed: {type(exc).__name__}") from exc
+        raise OpenReviewerError(f"local keyless reviewer inference failed: {type(exc).__name__}") from exc
 
     try:
         choice = response["choices"][0]
         content = choice["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
-        raise OpenReviewerError("local Khipu response shape is invalid") from exc
+        raise OpenReviewerError("local keyless reviewer response shape is invalid") from exc
     if not isinstance(content, str):
-        raise OpenReviewerError("local Khipu response shape is invalid")
+        raise OpenReviewerError("local keyless reviewer response shape is invalid")
     usage = response.get("usage") if isinstance(response, dict) else None
     metadata: dict[str, Any] = {
         "provider": "llama-cpp-python",

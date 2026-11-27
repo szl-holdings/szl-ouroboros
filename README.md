@@ -49,7 +49,7 @@ The default provider chain is explicit:
 1. use the existing pinned Codex action when `OPENAI_API_KEY` or
    `CODEX_API_KEY` is configured;
 2. otherwise run the public, exact-revision
-   `SZLHOLDINGS/SZL-Khipu-1.5B-GGUF` locally through a verified
+   `SZLHOLDINGS/SZL-Qwen2.5-7B-Instruct-GGUF` locally through a verified
    `llama-cpp-python` CPU wheel;
 3. fail closed if neither reviewer produces output that passes the independent
    schema, evidence, and authority validator.
@@ -59,7 +59,7 @@ Manual workflow_dispatch runs also offer an optional reviewer choice:
 | Choice | Behavior |
 |---|---|
 | auto (default) | Use the existing provider chain above. |
-| local-gguf | Disable Codex authority for this run and use only the existing exact pinned CPU Khipu lane. |
+| local-gguf | Disable Codex authority for this run and use only the existing exact pinned CPU keyless reviewer lane. |
 
 The choice is honored only for workflow_dispatch; scheduled, push, and other
 events retain automatic selection. Invalid manual values fail before source
@@ -84,7 +84,7 @@ Second Brain protected main
         ↓ exact revision + candidate SHA-256
 schema and authority replay
         ↓
-Codex OR exact public Khipu GGUF
+Codex OR exact public reviewer GGUF
         ↓ untrusted evidence-linked structured JSON
 independent deterministic validation
         ↓
@@ -95,12 +95,13 @@ Ouroboros timing + termination + receipt closure
 
 The keyless lane pins all model and runtime identity:
 
-- model repository: `SZLHOLDINGS/SZL-Khipu-1.5B-GGUF`;
-- model revision: `67d60ec577730747055491640cfb91fc4a4b5d25`;
-- model file: `SZL-Khipu-1.5B-Q4_K_M.gguf`;
-- model bytes: `986047904`;
+- model repository: `SZLHOLDINGS/SZL-Qwen2.5-7B-Instruct-GGUF`
+  (exact upstream Qwen2.5-7B-Instruct republish; no estate training);
+- model revision: `e016973495381872a3008566610b8126f1941eee`;
+- model file: `Qwen2.5-7B-Instruct-Q4_K_M.gguf`;
+- model bytes: `4683073952`;
 - model SHA-256:
-  `13c1a1993063e1dff92f7413ccf48eaca6d48efc8801ae9af35961ae3396623a`;
+  `3e357ab3eda2c442f25c0080bb8998eedc05fd16ce1728eacff9ccc5c3d240c6`;
 - runtime wheel: `llama-cpp-python 0.3.35` official manylinux CPU wheel;
 - wheel SHA-256:
   `d172f3d3c8cdd194c3c47c71cb077ed6e61354a2d0f939ceeac0c8fd29999596`;
@@ -223,7 +224,7 @@ ouroboros = get_kernel(
 trace = ouroboros.build_loop_trace(
     [{
         "provider": "llama-cpp-python",
-        "model": "SZLHOLDINGS/SZL-Khipu-1.5B-GGUF",
+        "model": "SZLHOLDINGS/SZL-Qwen2.5-7B-Instruct-GGUF",
         "ok": True,
         "latency_ms": 1200,
         "node": "scheduled-frontier-review",

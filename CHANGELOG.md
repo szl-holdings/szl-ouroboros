@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Repoint the keyless local-gguf reviewer to a stronger exact-pinned GGUF
+  (`SZLHOLDINGS/SZL-Qwen2.5-7B-Instruct-GGUF`, an upstream Qwen2.5-7B-Instruct
+  republish; no estate training is claimed) after the 1.5B lane produced
+  label-only validation steps and failed closed. Pins, generation grammar,
+  budgets, admission validators and the fail-closed terminal gate are
+  unchanged; live model qualification is pending the next scheduled run.
 - Add an optional manual auto/local-gguf reviewer choice. Only manual dispatch
   can force the existing pinned CPU lane; automatic selection remains unchanged.
   Reject invalid manual choices before preparation, suppress Codex authority for

@@ -69,14 +69,14 @@ def review_schema() -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_open_model_pin_matches_owned_a11oy_cortex_contract() -> None:
-    assert MODEL_REPOSITORY == "SZLHOLDINGS/SZL-Khipu-1.5B-GGUF"
-    assert MODEL_REVISION == "67d60ec577730747055491640cfb91fc4a4b5d25"
-    assert MODEL_FILENAME == "SZL-Khipu-1.5B-Q4_K_M.gguf"
+def test_open_model_pin_matches_owned_keyless_reviewer_contract() -> None:
+    assert MODEL_REPOSITORY == "SZLHOLDINGS/SZL-Qwen2.5-7B-Instruct-GGUF"
+    assert MODEL_REVISION == "e016973495381872a3008566610b8126f1941eee"
+    assert MODEL_FILENAME == "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
     assert MODEL_SHA256 == (
-        "13c1a1993063e1dff92f7413ccf48eaca6d48efc8801ae9af35961ae3396623a"
+        "3e357ab3eda2c442f25c0080bb8998eedc05fd16ce1728eacff9ccc5c3d240c6"
     )
-    assert MODEL_SIZE == 986_047_904
+    assert MODEL_SIZE == 4_683_073_952
 
 
 def test_verified_wheel_pin_is_exact_and_https_only() -> None:
@@ -819,13 +819,13 @@ def test_workflow_manual_choice_masks_authority_and_retains_review_gates() -> No
     assert 'permission-profile: ":read-only"' in codex
     assert "safety-strategy: drop-sudo" in codex
     for name in [
-        "Cache exact public Khipu model and verified wheel",
+        "Cache exact public reviewer model and verified wheel",
         "Install verified keyless open-model runtime",
-        "Run exact Khipu GGUF as the keyless advisory reviewer",
+        "Run exact reviewer GGUF as the keyless advisory reviewer",
     ]:
         block = workflow.split(f"      - name: {name}\n", 1)[1].split("\n      - name:", 1)[0]
         assert "if: steps.key.outputs.reviewer == 'local-gguf'" in block
-    _, local_shell = workflow_step("Run exact Khipu GGUF as the keyless advisory reviewer")
+    _, local_shell = workflow_step("Run exact reviewer GGUF as the keyless advisory reviewer")
     for setting in [
         "--provider local-gguf", "--candidate-limit 6", "--context-tokens 16384",
         "--max-tokens 1800", "--seed 749",

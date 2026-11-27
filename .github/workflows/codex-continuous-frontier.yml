@@ -117,7 +117,7 @@ jobs:
       REVIEW_OUTPUT: outputs/codex-review.json
       OPEN_EXECUTION_RECEIPT: outputs/open-reviewer-execution.json
       LOOP_RECEIPT: outputs/ouroboros-frontier-loop-receipt.json
-      OPEN_MODEL_LABEL: SZLHOLDINGS/SZL-Khipu-1.5B-GGUF@67d60ec577730747055491640cfb91fc4a4b5d25:SZL-Khipu-1.5B-Q4_K_M.gguf
+      OPEN_MODEL_LABEL: SZLHOLDINGS/SZL-Qwen2.5-7B-Instruct-GGUF@e016973495381872a3008566610b8126f1941eee:Qwen2.5-7B-Instruct-Q4_K_M.gguf
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
@@ -217,17 +217,17 @@ jobs:
           elif enabled:
               print("Codex API authority is configured; the existing read-only lane will run.")
           else:
-              print("No Codex API authority is configured; the exact public Khipu GGUF will run keylessly.")
+              print("No Codex API authority is configured; the exact public reviewer GGUF will run keylessly.")
           PY_SELECT
 
-      - name: Cache exact public Khipu model and verified wheel
+      - name: Cache exact public reviewer model and verified wheel
         if: steps.key.outputs.reviewer == 'local-gguf'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/huggingface/hub
             ~/.cache/szl-open-reviewer
-          key: khipu-open-reviewer-v1-13c1a1993063e1dff92f7413ccf48eaca6d48efc8801ae9af35961ae3396623a-d172f3d3c8cdd194c3c47c71cb077ed6e61354a2d0f939ceeac0c8fd29999596
+          key: keyless-reviewer-v1-3e357ab3eda2c442f25c0080bb8998eedc05fd16ce1728eacff9ccc5c3d240c6-d172f3d3c8cdd194c3c47c71cb077ed6e61354a2d0f939ceeac0c8fd29999596
 
       - name: Install verified keyless open-model runtime
         if: steps.key.outputs.reviewer == 'local-gguf'
@@ -268,7 +268,7 @@ jobs:
           allow-bots: true
           allow-bot-users: github-actions[bot]
 
-      - name: Run exact Khipu GGUF as the keyless advisory reviewer
+      - name: Run exact reviewer GGUF as the keyless advisory reviewer
         id: open_reviewer
         if: steps.key.outputs.reviewer == 'local-gguf'
         continue-on-error: true
