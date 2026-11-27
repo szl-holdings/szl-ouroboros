@@ -39,6 +39,7 @@ from scripts.run_open_frontier_review import (
     verify_model_file,
     write_execution_receipt,
 )
+from tests.gbnf_match import gbnf_matches
 
 
 def row(
@@ -258,6 +259,78 @@ def test_compact_validation_preserves_nonplaceholder_steps(step) -> None:
     assert admission == "MODEL_OUTPUT_ADMITTED"
     assert code is None
     assert review["recommendations"][0]["validation"] == [step]
+
+
+CONCRETE_VALIDATION_STEP_RULE = (
+    r'validation-step ::= "\"" first char{0,40} " " first char{0,76} "\""'
+)
+
+
+def compact_generation_grammar() -> str:
+    return build_compact_generation_grammar(
+        build_runtime_schema(
+            review_schema(),
+            candidate_digest="d" * 64,
+            allowed_candidate_ids=["frontier:" + "a" * 32],
+        )
+    )
+
+
+def test_generation_grammar_requires_concrete_validation_step_production() -> None:
+    grammar = compact_generation_grammar()
+    lines = grammar.splitlines()
+    assert CONCRETE_VALIDATION_STEP_RULE in lines
+    assert r'validation-step ::= "\"" first char{0,119} "\""' not in lines
+    assert r'summary ::= "\"" first char{0,119} "\""' in lines
+    assert r'title ::= "\"" first char{0,79} "\""' in lines
+    assert r'rationale ::= "\"" first char{0,239} "\""' in lines
+    assert r'risk ::= "\"" first char{0,119} "\""' in lines
+
+
+@pytest.mark.parametrize("placeholder", [
+    "risk:", "Risk", " test : ", "verify:", "validation:",
+    "check:", "TODO", "TBD", ":", "...", "",
+])
+def test_validation_step_grammar_rejects_placeholders(placeholder) -> None:
+    grammar = compact_generation_grammar()
+    assert gbnf_matches(grammar, "validation-step", json.dumps(placeholder)) is False
+    value = copy.deepcopy(proposed_review())
+    value["recommendations"][0]["validation"] = [placeholder]
+    document = json.dumps(value, separators=(",", ":"), ensure_ascii=True)
+    assert gbnf_matches(grammar, "root", document) is False
+
+
+@pytest.mark.parametrize("step", [
+    "Risk: confirm rollback on staging backup",
+    "Validation: rerun deterministic fixtures",
+    "Run unit tests and verify denial",
+])
+def test_validation_step_grammar_accepts_concrete_steps(step) -> None:
+    grammar = compact_generation_grammar()
+    assert gbnf_matches(grammar, "validation-step", json.dumps(step)) is True
+    value = copy.deepcopy(proposed_review())
+    value["recommendations"][0]["validation"] = [step]
+    document = json.dumps(value, separators=(",", ":"), ensure_ascii=True)
+    assert gbnf_matches(grammar, "root", document) is True
+
+
+def test_python_hold_still_rejects_space_padded_label_placeholders() -> None:
+    # The grammar requires a space and more text, so "TODO :" is still
+    # generable. The #63 Python hold must keep refusing it independently.
+    leftover = "TODO :"
+    grammar = compact_generation_grammar()
+    assert gbnf_matches(grammar, "validation-step", json.dumps(leftover)) is True
+    value = copy.deepcopy(proposed_review())
+    value["recommendations"][0]["validation"] = [leftover]
+    review, admitted, admission, code = admit_or_block_model_output(
+        json.dumps(value), candidate_digest="d" * 64,
+        selected_candidate_ids=["frontier:" + "a" * 32],
+    )
+    assert admitted is False
+    assert admission == "MODEL_OUTPUT_REJECTED_FAIL_CLOSED"
+    assert code == "VALIDATION_PLACEHOLDER"
+    assert review["recommendations"] == []
+    assert all(v == "NONE" for v in review["authority"].values())
 
 
 def test_projection_bounds_untrusted_candidate_content() -> None:

@@ -673,13 +673,23 @@ def build_compact_generation_grammar(runtime_schema: dict[str, Any]) -> str:
         ("title", "title_characters"),
         ("rationale", "rationale_characters"),
         ("risk", "risk_characters"),
-        ("validation-step", "validation_step_characters"),
     ):
         maximum = COMPACT_REVIEW_LIMITS[key]
         rules.append(
             name + " ::= " + literal('"') + " first char{0," + str(maximum - 1)
             + "} " + literal('"')
         )
+    # Concrete validation phrases only. This does not replace
+    # VALIDATION_LABEL_ONLY; the independent Python hold stays.
+    # Budget: 1 + 40 + 1 + 1 + 76 = 119 <= validation_step_characters (120).
+    rules.append(
+        "validation-step ::= "
+        + literal('"')
+        + " first char{0,40} "
+        + literal(" ")
+        + " first char{0,76} "
+        + literal('"')
+    )
     return "\n".join(rules) + "\n"
 
 
